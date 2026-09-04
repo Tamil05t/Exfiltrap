@@ -8,7 +8,7 @@
     "beforeDevCommand": "",
     "devPath": "http://127.0.0.1:5050",
     "beforeBuildCommand": "",
-    "distDir": "../exfiltrap/dashboard/templates"
+    "distDir": "../../exfiltrap/dashboard/templates"
   },
   "tauri": {
     "windows": [
