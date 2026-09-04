@@ -1,0 +1,64 @@
+# ExfilTrap detection service — systemd template unit.
+#
+# The daemon is deliberately NOT root: it runs as the dedicated, locked-down
+# `exfiltrap` user and receives exactly the two capabilities it needs via
+# AmbientCapabilities. This is the privilege-separation story in one file.
+#
+# Instantiate per interface:
+#   systemctl start exfiltrap@eth0
+#
+# Settings (environment overrides):
+#   EXFILTRAP_MITIGATION=log|iptables   (firewall backend; log is safe default)
+#   EXFILTRAP_EXECUTE=0|1               (1 actually installs firewall rules)
+#   EXFILTRAP_API_PORT=5050
+#   EXFILTRAP_ALERT=syslog              (SIEM alerting for HIGH/CONFIRMED)
+
+[Unit]
+Description=ExFilTrap DNS exfiltration detection service (%i)
+Documentation=file:/opt/exfiltrap/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=exfiltrap
+Group=exfiltrap
+
+# The two capabilities the detector needs, and nothing else.
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=yes
+
+# Hardening: the service reads packets, writes its own DB, exposes a
+# localhost API — and that is ALL it can do.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_PACKET
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/exfiltrap
+
+WorkingDirectory=/opt/exfiltrap
+Environment=EXFILTRAP_DB=/var/lib/exfiltrap/exfiltrap.db
+Environment=EXFILTRAP_MITIGATION=log
+Environment=EXFILTRAP_EXECUTE=0
+Environment=EXFILTRAP_API_PORT=5050
+Environment=EXFILTRAP_ALERT=syslog
+# Supervised liveness: the service pings WATCHDOG=1 only while its capture
+# thread's heartbeat is fresh — a hung capture triggers a clean restart.
+WatchdogSec=60
+Type=notify
+NotifyAccess=main
+ExecStart=/opt/exfiltrap/.venv/bin/python -m exfiltrap.service --iface %i
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,24 @@
+{
+  "feature_order": [
+    "entropy",
+    "length",
+    "subdomain_count",
+    "frequency"
+  ],
+  "n_estimators": 100,
+  "benign_rows": 20000,
+  "malicious_rows": 14880,
+  "holdout": {
+    "accuracy": 0.9709002293577982,
+    "precision": 0.9685810810810811,
+    "recall": 0.9630500503862949,
+    "fpr": 0.023255813953488372,
+    "tp": 2867,
+    "fp": 93,
+    "tn": 3906,
+    "fn": 110
+  },
+  "seed": 42,
+  "trained_at": "2026-08-23T10:02:05",
+  "sklearn_version": "1.9.0"
+}

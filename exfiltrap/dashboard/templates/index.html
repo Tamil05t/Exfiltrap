@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ExFilTrap — DNS Exfiltration Monitor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14; --panel: #121821; --panel2: #0e141c;
+      --border: #212b38; --text: #c9d1d9; --dim: #8b98a5;
+      --blue: #58a6ff; --red: #f85149; --amber: #d29922; --green: #3fb950;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+           background: var(--bg); color: var(--text); margin: 0; }
+    .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+    header { display: flex; align-items: center; gap: 1rem; padding: .8rem 1.4rem;
+             border-bottom: 1px solid var(--border); background: var(--panel2);
+             position: sticky; top: 0; z-index: 10; }
+    header h1 { font-size: 1.05rem; margin: 0; color: var(--blue);
+                letter-spacing: .04em; }
+    .chip { background: var(--panel); border: 1px solid var(--border);
+            border-radius: 99px; padding: .15rem .7rem; font-size: .72rem;
+            color: var(--dim); }
+    .chip b { color: var(--text); font-weight: 600; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+           display: inline-block; margin-right: .35rem; animation: pulse 2s infinite; }
+    .dot.stale { background: var(--red); animation: none; }
+    @keyframes pulse { 50% { opacity: .35; } }
+    header .spacer { flex: 1; }
+    header button { background: var(--panel); color: var(--text);
+            border: 1px solid var(--border); border-radius: 6px;
+            padding: .35rem .8rem; font-size: .78rem; cursor: pointer; }
+    header button:hover { border-color: var(--blue); }
+
+    nav { display: flex; gap: .2rem; padding: 0 1.4rem; background: var(--panel2);
+          border-bottom: 1px solid var(--border); position: sticky; top: 49px; }
+    nav button { background: none; border: none; color: var(--dim); padding: .7rem 1rem;
+                 font-size: .84rem; cursor: pointer; border-bottom: 2px solid transparent; }
+    nav button.active { color: var(--text); border-bottom-color: var(--blue); }
+    nav button:hover { color: var(--text); }
+
+    main { padding: 1.2rem 1.4rem; max-width: 1400px; margin: 0 auto; }
+    section.tab { display: none; }
+    section.tab.active { display: block; }
+
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+             gap: .8rem; margin-bottom: 1.1rem; }
+    .card { background: var(--panel); border: 1px solid var(--border);
+            border-radius: 10px; padding: .9rem 1.1rem; }
+    .card .num { font-size: 1.65rem; font-weight: 700; color: var(--blue); }
+    .card .lbl { color: var(--dim); font-size: .68rem; text-transform: uppercase;
+                 letter-spacing: .09em; margin-top: .15rem; }
+    .card.alert .num { color: var(--red); }
+    .card.good .num { color: var(--green); }
+
+    .grid2 { display: grid; grid-template-columns: 2fr 1fr; gap: .9rem; }
+    @media (max-width: 950px) { .grid2 { grid-template-columns: 1fr; } }
+    .panel { background: var(--panel); border: 1px solid var(--border);
+             border-radius: 10px; padding: .9rem 1rem; margin-bottom: .9rem; }
+    .panel h3 { margin: 0 0 .6rem; font-size: .78rem; color: var(--dim);
+                text-transform: uppercase; letter-spacing: .09em; }
+
+    table { border-collapse: collapse; width: 100%; font-size: .78rem; }
+    th, td { text-align: left; padding: .4rem .55rem; border-bottom:
+             1px solid var(--border); white-space: nowrap; }
+    th { color: var(--dim); position: sticky; top: 0; background: var(--panel);
+         font-weight: 600; font-size: .7rem; text-transform: uppercase;
+         letter-spacing: .06em; }
+    tbody tr:hover td { background: #161e29; }
+    td.qname { font-family: ui-monospace, Menlo, Consolas, monospace;
+               max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+    td.wrap { white-space: normal; max-width: 360px; }
+    .scroll { max-height: 430px; overflow: auto; border-radius: 8px; }
+
+    .risk { display: inline-block; padding: .08rem .5rem; border-radius: 5px;
+            font-size: .68rem; font-weight: 700; letter-spacing: .03em; }
+    .risk-CONFIRMED { background: #3d1418; color: var(--red); }
+    .risk-HIGH { background: #3a2c10; color: var(--amber); }
+    .risk-MEDIUM { background: #12233c; color: var(--blue); }
+    .risk-LOW { background: #11301c; color: var(--green); }
+    .flag { display: inline-block; margin-left: .3rem; padding: .05rem .4rem;
+            border-radius: 4px; font-size: .64rem; }
+    .flag.drip { background: #3a2c10; color: var(--amber); }
+    .flag.beacon { background: #2a1a3d; color: #b392f0; }
+    .flag.resp { background: #0e2f3a; color: #39c5cf; }
+
+    .toolbar { display: flex; gap: .6rem; margin-bottom: .7rem; flex-wrap: wrap; }
+    .toolbar input, .toolbar select { background: var(--panel2);
+            border: 1px solid var(--border); color: var(--text); border-radius: 6px;
+            padding: .38rem .6rem; font-size: .78rem; }
+    .toolbar input { min-width: 240px; }
+    .decoded { font-family: ui-monospace, Menlo, Consolas, monospace;
+               color: var(--green); font-size: .72rem; }
+    footer { color: var(--dim); font-size: .72rem; padding: 1rem 1.4rem 2rem;
+             border-top: 1px solid var(--border); margin-top: 1rem; }
+    .muted { color: var(--dim); }
+    .bar { height: 6px; background: var(--panel2); border-radius: 3px;
+           overflow: hidden; margin-top: .3rem; }
+    .bar i { display: block; height: 100%; background: var(--red); }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+  <header>
+    <h1>ExFilTrap</h1>
+    <span class="chip"><span class="dot" id="live-dot"></span>mode <b id="svc-mode">–</b></span>
+    <span class="chip">uptime <b id="svc-uptime">–</b></span>
+    <span class="chip">heartbeat <b id="svc-hb">–</b></span>
+    <span class="spacer"></span>
+    <button id="refresh-btn" title="pause/resume 5s auto-refresh">⏸ pause</button>
+  </header>
+
+  <nav>
+    <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="queries">Live Queries</button>
+    <button data-tab="alerts">Alerts</button>
+    <button data-tab="sessions">Sessions</button>
+    <button data-tab="blocked">Blocked</button>
+  </nav>
+
+  <main>
+    <!-- ============ OVERVIEW ============ -->
+    <section class="tab active" id="tab-overview">
+      <div class="cards">
+        <div class="card"><div class="num" id="k-queries">{{ totals.queries }}</div><div class="lbl">queries</div></div>
+        <div class="card alert"><div class="num" id="k-flagged">{{ totals.flagged }}</div><div class="lbl">flagged</div></div>
+        <div class="card alert"><div class="num" id="k-confirmed">{{ totals.confirmed }}</div><div class="lbl">confirmed decodes</div></div>
+        <div class="card alert"><div class="num" id="k-blocked">{{ totals.blocked }}</div><div class="lbl">blocked IPs</div></div>
+        <div class="card good"><div class="num" id="k-rate">–</div><div class="lbl">clean rate</div></div>
+        <div class="card"><div class="num" id="k-qps">–</div><div class="lbl">queries / min (last)</div></div>
+        <div class="card alert"><div class="num" id="k-resp">–</div><div class="lbl">response-channel flags</div></div>
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <h3>Queries vs flagged — 60s buckets</h3>
+          <canvas id="chart-flow" height="120"></canvas>
+        </div>
+        <div class="panel">
+          <h3>Risk distribution</h3>
+          <canvas id="chart-risk" height="180"></canvas>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <h3>Top talkers (flagged share)</h3>
+          <div id="top-talkers"></div>
+        </div>
+        <div class="panel">
+          <h3>Latest alerts</h3>
+          <div class="scroll"><table id="mini-alerts"></table></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ LIVE QUERIES ============ -->
+    <section class="tab" id="tab-queries">
+      <div class="toolbar">
+        <input id="q-search" placeholder="filter by qname or source…" />
+        <select id="q-risk">
+          <option value="">all levels</option>
+          <option>CONFIRMED</option><option>HIGH</option>
+          <option>MEDIUM</option><option>LOW</option>
+        </select>
+        <span class="muted" id="q-count"></span>
+      </div>
+      <div class="panel scroll" style="padding:0">
+        <table id="q-table">
+          <thead><tr><th>time</th><th>src</th><th>qname</th><th>risk</th><th>P(mal)</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ ALERTS ============ -->
+    <section class="tab" id="tab-alerts">
+      <div class="toolbar">
+        <input id="a-search" placeholder="filter alerts…" />
+        <select id="a-risk">
+          <option value="">all levels</option>
+          <option>CONFIRMED</option><option>HIGH</option>
+        </select>
+        <span class="muted" id="a-count"></span>
+      </div>
+      <div class="panel scroll" style="padding:0">
+        <table id="a-table">
+          <thead><tr><th>time</th><th>src</th><th>qname</th><th>risk</th>
+                     <th>reasons</th><th>decoded payload</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ SESSIONS ============ -->
+    <section class="tab" id="tab-sessions">
+      <p class="muted" style="font-size:.8rem">
+        Live per-source sessions from the stateful tracker (M3): the mass
+        z-test compares a session's mean entropy-weighted byte mass against
+        the learned population; the beacon flag marks machine-periodic
+        inter-arrival timing (CV &lt; 0.25).
+      </p>
+      <div class="panel scroll" style="padding:0">
+        <table id="s-table">
+          <thead><tr><th>src</th><th>queries (2h)</th><th>mean mass</th>
+                     <th>cumulative</th><th>interval CV</th><th>signals</th>
+                     <th>last seen</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ BLOCKED ============ -->
+    <section class="tab" id="tab-blocked">
+      <p class="muted" style="font-size:.8rem">
+        Blocks carry a TTL (auto-unban) and can be reversed here — localhost
+        console action only.
+      </p>
+      <div class="panel scroll" style="padding:0">
+        <table id="b-table">
+          <thead><tr><th>src</th><th>since</th><th>risk at block</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    rows are clickable for full detail · ExFilTrap stateful DNS exfiltration monitor · unprivileged reader of the
+    local detection service · <span class="muted" id="foot-note"></span>
+  </footer>
+
+  <script>
+   // ---------------- plumbing ----------------
+   let autoRefresh = true, currentTab = "overview";
+   let flowChart = null, riskChart = null;
+   const $ = (id) => document.getElementById(id);
+   const esc = (s) => String(s ?? "").replace(/[&<>"]/g,
+       (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+   const fmtT = (ts) => new Date(ts * 1000).toLocaleTimeString();
+
+   document.querySelectorAll("nav button").forEach((b) => {
+     b.onclick = () => {
+       document.querySelectorAll("nav button").forEach((x) => x.classList.remove("active"));
+       document.querySelectorAll("section.tab").forEach((x) => x.classList.remove("active"));
+       b.classList.add("active");
+       currentTab = b.dataset.tab;
+       $("tab-" + currentTab).classList.add("active");
+       refresh();
+     };
+   });
+   $("refresh-btn").onclick = () => {
+     autoRefresh = !autoRefresh;
+     $("refresh-btn").textContent = autoRefresh ? "⏸ pause" : "▶ resume";
+   };
+
+   // ---------------- data loads ----------------
+   async function jget(url) {
+     const r = await fetch(url);
+     return r.ok ? r.json() : null;
+   }
+
+   async function loadStats() {
+     const d = await jget("/api/stats");
+     if (!d) return;
+     const t = d.totals;
+     $("k-queries").textContent = t.queries;
+     $("k-flagged").textContent = t.flagged;
+     $("k-confirmed").textContent = t.confirmed;
+     $("k-blocked").textContent = t.blocked;
+     $("k-rate").textContent = t.queries ?
+         (100 * (1 - t.flagged / t.queries)).toFixed(1) + "%" : "–";
+     const last = d.timeseries[d.timeseries.length - 1];
+     $("k-qps").textContent = last ? last.queries : "–";
+
+     const ts = d.timeseries;
+     if (typeof Chart === "undefined") return;
+     if (flowChart) {
+       flowChart.data.labels = ts.map((x) => x.bucket);
+       flowChart.data.datasets[0].data = ts.map((x) => x.queries);
+       flowChart.data.datasets[1].data = ts.map((x) => x.flagged);
+       flowChart.update("none");
+     } else {
+       flowChart = new Chart($("chart-flow"), {
+         type: "line",
+         data: { labels: ts.map((x) => x.bucket), datasets: [
+           { label: "queries", data: ts.map((x) => x.queries),
+             borderColor: "#58a6ff", pointRadius: 0, tension: .3 },
+           { label: "flagged", data: ts.map((x) => x.flagged),
+             borderColor: "#f85149", pointRadius: 0, fill: true,
+             backgroundColor: "#f8514922", tension: .3 } ] },
+         options: chartOpts() });
+     }
+     const lv = d.levels || {};
+     const levels = ["LOW", "MEDIUM", "HIGH", "CONFIRMED"];
+     if (riskChart) {
+       riskChart.data.datasets[0].data = levels.map((l) => lv[l] || 0);
+       riskChart.update("none");
+     } else {
+       riskChart = new Chart($("chart-risk"), {
+         type: "doughnut",
+         data: { labels: levels, datasets: [{ data: levels.map((l) => lv[l] || 0),
+           backgroundColor: ["#3fb950", "#58a6ff", "#d29922", "#f85149"],
+           borderColor: "#121821" }] },
+         options: { plugins: { legend: { position: "bottom",
+             labels: { color: "#c9d1d9", boxWidth: 12 } } },
+             cutout: "62%" } });
+     }
+     // top talkers with flagged share bars
+     const maxF = Math.max(1, ...d.top_sources.map((s) => s.flagged));
+     $("top-talkers").innerHTML = d.top_sources.map((s) => `
+       <div style="margin:.45rem 0">
+         <span class="mono">${esc(s.src_ip)}</span>
+         <span class="muted"> · ${s.flagged} flagged / ${s.total}</span>
+         <div class="bar"><i style="width:${(100 * s.flagged / maxF)|0}%"></i></div>
+       </div>`).join("") || '<p class="muted">no traffic yet</p>';
+   }
+
+   async function loadStatus() {
+     const s = await jget("/api/status").catch(() => null);
+     if (!s) return;
+     $("svc-mode").textContent = s.mode || "standalone";
+     $("svc-uptime").textContent = s.uptime_s != null ?
+         Math.floor(s.uptime_s / 60) + "m " + Math.floor(s.uptime_s % 60) + "s" : "–";
+     if (s.capture_heartbeat_age_s != null) {
+       $("svc-hb").textContent = s.capture_heartbeat_age_s.toFixed(1) + "s";
+       $("live-dot").classList.toggle("stale", s.capture_heartbeat_age_s > 30);
+     }
+     $("foot-note").textContent =
+         `${s.queries_processed ?? 0} queries processed this session`;
+   }
+
+   async function loadQueries() {
+     const risk = $("q-risk").value;
+     const d = await jget("/api/queries?limit=200" + (risk ? "&risk=" + risk : ""));
+     if (!d) return;
+     const needle = $("q-search").value.toLowerCase();
+     const rows = d.queries.filter((q) =>
+         !needle || q.qname.toLowerCase().includes(needle) ||
+         q.src_ip.includes(needle));
+     $("q-count").textContent = rows.length + " rows";
+     $("q-table").querySelector("tbody").innerHTML = rows.map((q) => `
+       <tr><td>${fmtT(q.ts)}</td><td class="mono">${esc(q.src_ip)}</td>
+       <td class="qname" title="${esc(q.qname)}">${esc(q.qname)}</td>
+       <td><span class="risk risk-${q.risk_level}">${q.risk_level}</span></td>
+       <td>${Number(q.rf_probability).toFixed(3)}</td></tr>`).join("");
+   }
+
+   async function loadAlerts() {
+     const d = await jget("/api/events?limit=200");
+     if (!d) return;
+     const risk = $("a-risk").value;
+     const needle = $("a-search").value.toLowerCase();
+     const rows = d.events.filter((e) =>
+         (!risk || e.risk_level === risk) &&
+         (!needle || (e.qname + e.reasons + e.src_ip).toLowerCase().includes(needle)));
+     $("a-count").textContent = rows.length + " alerts";
+     // mini table on overview shows the first 6 regardless of filters
+     const mini = d.events.slice(0, 6).map(alertRow).join("");
+     if (document.querySelector("#mini-alerts tbody") === null) {
+       $("mini-alerts").innerHTML = "<tbody>" + mini + "</tbody>";
+     } else {
+       $("mini-alerts").querySelector("tbody").innerHTML = mini;
+     }
+     $("a-table").querySelector("tbody").innerHTML = rows.map(alertRow).join("");
+   }
+
+   let detailRow = null;  // currently expanded row (one at a time)
+
+   function toggleDetail(html) {
+     if (detailRow) { detailRow.remove(); detailRow = null; }
+     if (html) {
+       detailRow = document.createElement("tr");
+       detailRow.innerHTML = `<td colspan="6" style="background:#0e141c;
+         border-left:2px solid var(--blue); padding:.6rem .8rem">
+         <div class="mono" style="font-size:.72rem;white-space:pre-wrap"
+              id="detail-box">${html}</div></td>`;
+       return detailRow;
+     }
+     return null;
+   }
+
+   function alertRow(e) {
+     const isResp = (e.reasons || "").includes("response channel");
+     const detail = esc(JSON.stringify({
+       time: new Date(e.ts * 1000).toISOString(), src: e.src_ip,
+       qname: e.qname, risk: e.risk_level, reasons: e.reasons,
+       decoded: e.decoded_preview || null,
+     }, null, 2));
+     return `<tr style="cursor:pointer" data-detail="${detail}"
+       onclick="showDetail(this)">
+       <td>${fmtT(e.ts)}</td><td class="mono">${esc(e.src_ip)}</td>
+       <td class="qname" title="${esc(e.qname)}">${esc(e.qname)}</td>
+       <td><span class="risk risk-${e.risk_level}">${e.risk_level}</span>${isResp ? '<span class="flag resp">RESP</span>' : ""}</td>
+       <td class="wrap muted">${esc(e.reasons)}</td>
+       <td class="decoded wrap">${e.confirmed ? esc(e.decoded_preview || "") : ""}</td></tr>`;
+   }
+
+   function showDetail(tr) {
+     const text = tr.dataset.detail || "";
+     const row = toggleDetail(text ? `<pre style="margin:0">${text}</pre>` : null);
+     if (row) tr.after(row);
+   }
+
+   async function loadSessions() {
+     const d = await jget("/api/sessions");
+     if (!d) return;
+     $("s-table").querySelector("tbody").innerHTML = (d.sessions || []).map((s) => `
+       <tr><td class="mono">${esc(s.src_ip)}</td><td>${s.query_count}</td>
+       <td>${s.mean_mass}</td><td>${s.cumulative_mass}</td>
+       <td>${s.interval_cv == null ? "–" : s.interval_cv}</td>
+       <td>${s.slow_drip ? '<span class="flag drip">MASS</span>' : ""}${s.beacon ? '<span class="flag beacon">BEACON</span>' : ""}</td>
+       <td>${fmtT(s.last_seen)}</td></tr>`).join("") ||
+       '<tr><td colspan="7" class="muted">no sessions — standalone dashboard? run the service for live sessions</td></tr>';
+   }
+
+   function loadBlocked() {
+     const rows = JSON.parse($("blocked-json").textContent);
+     $("b-table").querySelector("tbody").innerHTML = rows.map((x) => `
+       <tr><td class="mono">${esc(x.src_ip)}</td><td>${fmtT(x.ts)}</td>
+       <td><span class="risk risk-${x.risk_level}">${x.risk_level}</span></td>
+       <td><button onclick="unblock('${esc(x.src_ip)}')" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:.15rem .5rem;cursor:pointer;font-size:.7rem">unblock</button></td></tr>`).join("") ||
+       '<tr><td colspan="4" class="muted">none</td></tr>';
+   }
+
+   function chartOpts() {
+     return { animation: false, interaction: { mode: "index", intersect: false },
+       plugins: { legend: { labels: { color: "#c9d1d9", boxWidth: 12 } } },
+       scales: { x: { ticks: { color: "#8b98a5", maxTicksLimit: 10 },
+                      grid: { color: "#161e29" } },
+                 y: { ticks: { color: "#8b98a5" }, grid: { color: "#161e29" },
+                      beginAtZero: true } } };
+   }
+
+   function refresh() {
+     loadStats(); loadStatus();
+     if (currentTab === "queries") loadQueries();
+     if (currentTab === "alerts") loadAlerts();
+     if (currentTab === "sessions") loadSessions();
+     if (currentTab === "blocked") loadBlocked();
+   }
+   $("q-risk").onchange = loadQueries;
+   $("a-risk").onchange = loadAlerts;
+   $("q-search").oninput = loadQueries;
+   $("a-search").oninput = loadAlerts;
+   async function unblock(ip) {
+     const r = await fetch("/api/unblock", { method: "POST",
+       headers: {"Content-Type": "application/json"},
+       body: JSON.stringify({src_ip: ip}) });
+     if (r.ok) { loadBlocked(); }
+   }
+   refresh();
+   setInterval(() => { if (autoRefresh && !document.hidden) refresh(); }, 5000);
+  </script>
+  <script type="application/json" id="blocked-json">{{ blocked | tojson }}</script>
+</body>
+</html>

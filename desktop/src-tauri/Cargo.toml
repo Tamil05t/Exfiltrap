@@ -1,0 +1,16 @@
+[package]
+name = "exfiltrap-desktop"
+version = "1.0.0"
+description = "ExFilTrap DNS exfiltration monitor — desktop shell"
+authors = ["ExFilTrap Project"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "1", features = [] }
+
+[dependencies]
+tauri = { version = "1", features = ["system-tray"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
