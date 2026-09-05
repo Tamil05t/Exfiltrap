@@ -79,6 +79,10 @@ avoids looking like malware in the first place.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# NOTE: always run ExFilTrap through .venv/bin/python — the system
+# python3 does not have the dependencies (joblib, sklearn, scapy...).
+# To use the system python instead:
+#   python3 -m pip install --break-system-packages -r requirements.txt
 make test            # 198 tests, no root needed
 make train           # trains data/model/rf_model.joblib (reproducible, seeded)
 make eval            # reproduces the results table

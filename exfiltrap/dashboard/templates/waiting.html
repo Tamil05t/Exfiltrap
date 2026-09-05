@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <title>ExFilTrap — starting</title>
-  <meta http-equiv="refresh" content="6" url="http://127.0.0.1:5050">
   <style>
     :root { color-scheme: dark; }
     body { font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
            background: #0b0f14; color: #c9d1d9; display: flex;
            min-height: 100vh; margin: 0; align-items: center; justify-content: center; }
-    .box { text-align: center; max-width: 34rem; padding: 2rem; }
+    .box { text-align: center; max-width: 36rem; padding: 2rem; }
     h1 { color: #58a6ff; font-size: 1.3rem; letter-spacing: .04em; }
     .dot { width: 14px; height: 14px; border-radius: 50%; background: #d29922;
            display: inline-block; margin-right: .5rem; animation: pulse 1.4s infinite; }
+    .dot.up { background: #3fb950; }
     @keyframes pulse { 50% { opacity: .25; } }
     p { color: #8b98a5; line-height: 1.6; }
     code, pre { font-family: ui-monospace, Menlo, Consolas, monospace;
@@ -26,17 +26,43 @@
 </head>
 <body>
   <div class="box">
-    <h1><span class="dot"></span>ExFilTrap is starting…</h1>
+    <h1><span class="dot" id="d"></span><span id="msg">ExFilTrap is starting…</span></h1>
     <p>This desktop app is the monitor for the ExfilTrap detection service.
-       The window opens automatically as soon as the service answers on
-       <code>127.0.0.1:5050</code> — this page retries every few seconds.</p>
+       It switches to the dashboard automatically as soon as the service is
+       reachable on <code>127.0.0.1:5050</code>.</p>
     <p>If you have not started the service yet, run one of:</p>
-    <pre># root-free demo (recommended first run)
-python3 -m exfiltrap.service --demo --fresh-db
+    <pre># root-free demo (fresh data, no capture)
+.venv/bin/python -m exfiltrap.service --demo --fresh-db
 
-# live capture (needs the installed service or sudo)
-python3 -m exfiltrap.service --iface YOUR_INTERFACE</pre>
-    <button onclick="location.replace('http://127.0.0.1:5050')">Retry now</button>
+# live capture with sudo (system python needs deps first)
+sudo python3 -m exfiltrap.service --iface YOUR_INTERFACE
+#   (system python: pip install --break-system-packages -r requirements.txt first)</pre>
+    <button onclick="go()">Open dashboard now</button>
   </div>
+  <script>
+    // no-cors: resolves when ANY server answers on 5050 (opaque response),
+    // rejects on connection-refused — enough to detect "service is up"
+    // without depending on CORS headers.
+    const url = 'http://127.0.0.1:5050/api/status';
+    function up() {
+      return fetch(url, { mode: 'no-cors', cache: 'no-store' })
+        .then(() => true).catch(() => false);
+    }
+    function go() { location.replace('http://127.0.0.1:5050'); }
+    (async function poll() {
+      for (let i = 0; i < 120; i++) {
+        if (await up()) {
+          document.getElementById('d').classList.add('up');
+          document.getElementById('msg').textContent =
+            'Service detected — opening dashboard…';
+          setTimeout(go, 600);
+          return;
+        }
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      document.getElementById('msg').textContent =
+        'Still waiting for the detection service…';
+    })();
+  </script>
 </body>
 </html>

@@ -22,6 +22,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     cmd, rest = argv[0], argv[1:]
 
+    try:
+        return _dispatch(cmd, rest)
+    except ModuleNotFoundError as exc:
+        print(
+            f"ExFilTrap dependencies are missing ({exc.name}).\n"
+            "Install them with:\n"
+            "  python3 -m pip install --break-system-packages -r requirements.txt\n"
+            "or run through the project virtualenv (.venv/bin/python)."
+        )
+        return 1
+
+
+def _dispatch(cmd, rest):
     if cmd == "service":
         from exfiltrap.service import main as run
         return run(rest)

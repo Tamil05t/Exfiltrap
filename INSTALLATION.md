@@ -82,6 +82,10 @@ service (3c) and the window opens automatically.
 ```bash
 git clone <your-repo> && cd exfiltrap
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# NOTE: always run ExFilTrap through .venv/bin/python — the system
+# python3 does not have the dependencies (joblib, sklearn, scapy...).
+# To use the system python instead:
+#   python3 -m pip install --break-system-packages -r requirements.txt
 .venv/bin/python tools/train_classifier.py     # one-time: trains the RF model
 
 sudo ./tools/install_linux.sh eth0             # ONE sudo prompt, then never again
@@ -194,9 +198,9 @@ bash tools/stress_test.sh                    # randomized stress suite
    service answers on `127.0.0.1:5050`. **If no service is running you get
    the waiting screen, not a dashboard.** Start a service first:
    ```bash
-   python3 -m exfiltrap.service --demo --fresh-db   # root-free, fresh data
+   .venv/bin/python -m exfiltrap.service --demo --fresh-db   # root-free, fresh data
    # or, for live capture (needs the installed service or sudo):
-   sudo python3 -m exfiltrap.service --iface YOUR_INTERFACE
+   sudo .venv/bin/python -m exfiltrap.service --iface YOUR_INTERFACE
    ```
    Find your interface name with `ip -br link` (e.g. `eth0`, `wlan0`, `enp3s0`).
 6. The `.deb` installs the same desktop app system-wide (Start menu entry);

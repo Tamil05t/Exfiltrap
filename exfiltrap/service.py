@@ -26,12 +26,23 @@ import threading
 import time
 from pathlib import Path
 
-from exfiltrap import config, privileges
-from exfiltrap.classifier import DNSClassifier
-from exfiltrap.dashboard.app import create_app
-from exfiltrap.events import DNSQuery, DNSResponse
-from exfiltrap.pipeline import ExfilTrapPipeline
-from exfiltrap.storage import Storage
+try:
+    from exfiltrap import config, privileges
+    from exfiltrap.classifier import DNSClassifier
+    from exfiltrap.dashboard.app import create_app
+    from exfiltrap.events import DNSQuery, DNSResponse
+    from exfiltrap.pipeline import ExfilTrapPipeline
+    from exfiltrap.storage import Storage
+except ModuleNotFoundError as exc:
+    print(
+        f"ExFilTrap dependencies are missing ({exc.name}).\n"
+        "Install them with one of:\n"
+        "  python3 -m pip install --break-system-packages -r requirements.txt"
+        "   (system python)\n"
+        "  .venv/bin/python -m exfiltrap.service ...        (project virtualenv)\n"
+        "Then re-run this command."
+    )
+    raise SystemExit(1)
 
 log = logging.getLogger("exfiltrap.service")
 
