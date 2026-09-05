@@ -21,8 +21,10 @@ jobs:
         run: python tools/train_classifier.py
       - name: Build exfiltrap.exe (--onedir; no UPX — AV posture)
         run: pyinstaller packaging/windows/exfiltrap.spec --noconfirm --distpath dist --workpath build
-      - name: Smoke-test the packaged CLI
-        run: dist\exfiltrap\exfiltrap.exe privileges
+      - name: Smoke-test the packaged CLI + model load
+        run: |
+          dist\exfiltrap\exfiltrap.exe privileges
+          dist\exfiltrap\exfiltrap.exe eval --profiles benign --full-only
       - name: Build installer (Inno Setup)
         shell: cmd
         run: |
@@ -52,10 +54,11 @@ jobs:
         run: pip install -r requirements.txt pyinstaller
       - name: Build exfiltrap service (--onedir)
         run: pyinstaller packaging/linux/exfiltrap-linux.spec --noconfirm --distpath dist --workpath build
-      - name: Smoke-test the packaged CLI
+      - name: Smoke-test the packaged CLI + model load
         run: |
           ./dist/exfiltrap/exfiltrap privileges
           ./dist/exfiltrap/exfiltrap service --help
+          timeout 300 ./dist/exfiltrap/exfiltrap eval --profiles benign --full-only
       - name: Package tarball
         run: tar -czf exfiltrap-linux-service.tar.gz -C dist exfiltrap
       - name: Upload artifact
@@ -82,6 +85,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.0-dev libgtk-3-dev \
             libayatana-appindicator3-dev librsvg2-dev
+      - name: Build bundled detection engine (goes INSIDE the AppImage/deb)
+        run: |
+          pip install -r requirements.txt pyinstaller
+          pyinstaller packaging/linux/exfiltrap-linux.spec --noconfirm --distpath dist --workpath build
+          ./dist/exfiltrap/exfiltrap privileges
+          timeout 300 ./dist/exfiltrap/exfiltrap eval --profiles benign --full-only
       - name: Generate platform icons from the source icon
         run: |
           python tools/make_icon.py desktop/src-tauri/icons/icon-source.png

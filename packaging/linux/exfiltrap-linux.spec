@@ -25,6 +25,7 @@ a = Analysis(
         (str(ROOT / "data" / "model" / "rf_model.joblib"), "data/model"),
     ],
     hiddenimports=[
+        "sklearn", "scipy", "joblib",
         "exfiltrap.service",
         "exfiltrap.winservice",
         "exfiltrap.dashboard.app",

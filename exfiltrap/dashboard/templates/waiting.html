@@ -30,15 +30,21 @@
     <p>This desktop app is the monitor for the ExfilTrap detection service.
        It switches to the dashboard automatically as soon as the service is
        running on <code>127.0.0.1:5050</code>.</p>
-    <p><b>Start the service (as root):</b></p>
-    <pre># Linux — official service build (exfiltrap-linux-service artifact):
-sudo ./exfiltrap service --iface YOUR_INTERFACE
-
-# or the installed systemd service:
-sudo systemctl start exfiltrap@YOUR_INTERFACE
-
-# Windows: the ExFilTrapSvc service starts automatically at boot;
-# manage it with:  exfiltrap.exe winservice start | stop</pre>
+    <p><b>Start the detection engine</b> — one click, one root prompt.
+       Network interface to watch:</p>
+    <div style="display:flex; gap:.5rem; justify-content:center; margin:.6rem 0 1rem">
+      <input id="iface" value="eth0" spellcheck="false"
+             style="background:#121821;border:1px solid #212b38;color:#c9d1d9;
+                    border-radius:8px;padding:.55rem .8rem;font-size:.9rem;
+                    font-family:ui-monospace,Menlo,monospace;width:11rem">
+      <button onclick="startSvc()" style="margin:0">Start service</button>
+    </div>
+    <p id="status" style="min-height:1.4em"></p>
+    <p style="font-size:.8rem">Headless instead? The engine also runs from a
+       terminal: <code>sudo ./exfiltrap service --iface eth0</code> (Linux
+       service build) or <code>sudo systemctl start exfiltrap@eth0</code>
+       (installed service). Windows: install ExFilTrap-Setup.exe — the
+       service auto-starts.</p>
     <button onclick="go()">Open dashboard now</button>
   </div>
   <script>
@@ -48,6 +54,22 @@ sudo systemctl start exfiltrap@YOUR_INTERFACE
         .then(() => true).catch(() => false);
     }
     function go() { location.replace('http://127.0.0.1:5050'); }
+    async function startSvc() {
+      const st = document.getElementById('status');
+      const iface = document.getElementById('iface').value.trim() || 'eth0';
+      st.textContent = 'Requesting root authorization (polkit prompt)…';
+      try {
+        if (window.__TAURI__ && window.__TAURI__.invoke) {
+          await window.__TAURI__.invoke('start_service', { iface });
+          st.textContent = 'Service starting — waiting for the dashboard…';
+        } else {
+          st.textContent = 'Not running inside the desktop app — start the ' +
+            'service from a terminal (commands above).';
+        }
+      } catch (e) {
+        st.textContent = 'Start failed: ' + e;
+      }
+    }
     (async function poll() {
       for (let i = 0; i < 240; i++) {
         if (await up()) {
