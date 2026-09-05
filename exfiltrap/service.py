@@ -212,8 +212,9 @@ def main(argv: list[str] | None = None) -> int:
         prog="python3 -m exfiltrap.service",
         description="ExfilTrap detection service (capture + API + dashboard)",
     )
-    parser.add_argument("--iface", required=True,
-                        help="network interface to capture (run as root)")
+    parser.add_argument("--iface", default=None,
+                        help="interface to capture (default: auto-detect the "
+                             "default-route / internet interface)")
     parser.add_argument("--db", default=None)
     parser.add_argument("--flush-every", type=int, default=50,
                         help="rows buffered before a SQLite commit")
@@ -238,6 +239,23 @@ def main(argv: list[str] | None = None) -> int:
                         help="SIEM alerting for HIGH/CONFIRMED detections")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
+
+    # Smart interface selection: the default-route interface IS the one
+    # carrying internet traffic (eth0, wlan0, wlo1, ...), so we find it
+    # instead of asking the operator to guess a name.
+    if not args.iface or args.iface.lower() in ("auto", "default"):
+        from exfiltrap import netif
+
+        args.iface = netif.default_interface()
+        if not args.iface:
+            print(
+                "could not auto-detect the internet interface.\n"
+                "Available interfaces:\n  "
+                + "\n  ".join(netif.list_interfaces())
+                + "\nPass one explicitly with --iface."
+            )
+            return 2
+        print(f"auto-detected internet interface: {args.iface}")
 
     # Environment fallbacks used by the systemd unit (packaging/linux):
     # the unit passes configuration via Environment= so operators can
@@ -270,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    if args.iface and not privileges.has_capture_capability():
+    if not privileges.has_capture_capability():
         print(
             "ERROR: this process cannot capture packets on this interface.\n"
             "       Run me via the installed service"

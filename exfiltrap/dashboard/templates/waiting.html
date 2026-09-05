@@ -31,12 +31,13 @@
        It switches to the dashboard automatically as soon as the service is
        running on <code>127.0.0.1:5050</code>.</p>
     <p><b>Start the detection engine</b> — one click, one root prompt.
-       Network interface to watch:</p>
+       The internet interface is detected automatically; override only if
+       you need a specific one:</p>
     <div style="display:flex; gap:.5rem; justify-content:center; margin:.6rem 0 1rem">
-      <input id="iface" value="eth0" spellcheck="false"
+      <input id="iface" placeholder="auto-detect (recommended)" spellcheck="false"
              style="background:#121821;border:1px solid #212b38;color:#c9d1d9;
                     border-radius:8px;padding:.55rem .8rem;font-size:.9rem;
-                    font-family:ui-monospace,Menlo,monospace;width:11rem">
+                    font-family:ui-monospace,Menlo,monospace;width:14rem">
       <button onclick="startSvc()" style="margin:0">Start service</button>
     </div>
     <p id="status" style="min-height:1.4em"></p>
@@ -54,17 +55,26 @@
         .then(() => true).catch(() => false);
     }
     function go() { location.replace('http://127.0.0.1:5050'); }
+    async function tauriApi() {
+      // withGlobalTauri injects asynchronously after page load — wait for it.
+      for (let i = 0; i < 20; i++) {
+        if (window.__TAURI__ && window.__TAURI__.invoke) return window.__TAURI__;
+        await new Promise(r => setTimeout(r, 150));
+      }
+      return null;
+    }
     async function startSvc() {
       const st = document.getElementById('status');
-      const iface = document.getElementById('iface').value.trim() || 'eth0';
+      const iface = document.getElementById('iface').value.trim();
       st.textContent = 'Requesting root authorization (polkit prompt)…';
+      const api = await tauriApi();
       try {
-        if (window.__TAURI__ && window.__TAURI__.invoke) {
-          await window.__TAURI__.invoke('start_service', { iface });
+        if (api) {
+          await api.invoke('start_service', { iface });
           st.textContent = 'Service starting — waiting for the dashboard…';
         } else {
           st.textContent = 'Not running inside the desktop app — start the ' +
-            'service from a terminal (commands above).';
+            'service from a terminal (commands below).';
         }
       } catch (e) {
         st.textContent = 'Start failed: ' + e;

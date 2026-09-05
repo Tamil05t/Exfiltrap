@@ -57,14 +57,11 @@ def service_args() -> list[str]:
 
 
 def _first_interface() -> str:
-    """First active non-loopback adapter (Windows)."""
+    """The adapter carrying the default route (Windows)."""
     try:
-        out = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "(Get-NetAdapter | Where-Object Status -eq 'Up' | "
-             "Select-Object -First 1).Name"],
-            capture_output=True, text=True, timeout=15)
-        name = out.stdout.strip()
+        from exfiltrap import netif
+
+        name = netif.default_interface()
         if name:
             return name
     except Exception:

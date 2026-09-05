@@ -86,7 +86,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 make test            # 198 tests, no root needed
 make train           # trains data/model/rf_model.joblib (reproducible, seeded)
 make eval            # reproduces the results table
-sudo make service IFACE=wlan0   # live service on http://127.0.0.1:5050
+sudo make service               # live service (iface auto-detected)
 ```
 
 Single-entry CLI (what the packaged executables expose):

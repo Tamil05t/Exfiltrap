@@ -1,7 +1,7 @@
 # ExfilTrap — developer and packaging entrypoints.
 SHELL := /bin/bash
 PY    := .venv/bin/python
-IFACE ?= $(shell ip -o -4 route show default 2>/dev/null | awk '{print $$5}' | head -1)
+IFACE ?=
 
 .PHONY: help test train eval service dashboard privileges \
         install-linux uninstall-linux desktop-dev desktop-build
@@ -11,7 +11,7 @@ help:
 	@echo "  make test                       full pytest suite"
 	@echo "  make train                      (re)train the Random Forest model"
 	@echo "  make eval                       evaluation (3 profiles + control)"
-	@echo "  make service IFACE=wlan0        run the live service (sudo)"
+	@echo "  make service                    live service (sudo; auto-detects iface)"
 	@echo "  make dashboard                  dashboard against the local DB"
 	@echo "  make install-linux IFACE=eth0   one-time privileged install"
 	@echo "  make uninstall-linux IFACE=eth0"
@@ -27,7 +27,7 @@ eval:
 	$(PY) eval/run_evaluation.py
 
 service:
-	sudo $(PY) -m exfiltrap.service --iface $(IFACE)
+	sudo $(PY) -m exfiltrap.service $(if $(IFACE),--iface $(IFACE),)
 
 dashboard:
 	$(PY) -m exfiltrap.dashboard

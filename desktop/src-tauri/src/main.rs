@@ -85,10 +85,14 @@ fn start_service(app: tauri::AppHandle, iface: String) -> Result<String, String>
         "bundled detection engine not found in this package".to_string()
     })?;
     let bin = bin.to_string_lossy().to_string();
-    let iface = iface.replace(['\'', ';', '\\'], "");
-    let script = format!(
-        "nohup '{bin}' service --iface '{iface}' >/tmp/exfiltrap-service.log 2>&1 &"
-    );
+    let iface = iface.trim().replace(['\'', ';', '\\'], "");
+    // Empty iface = let the engine auto-detect the internet interface
+    // (default route) — the smart default.
+    let script = if iface.is_empty() {
+        format!("nohup '{bin}' service >/tmp/exfiltrap-service.log 2>&1 &")
+    } else {
+        format!("nohup '{bin}' service --iface '{iface}' >/tmp/exfiltrap-service.log 2>&1 &")
+    };
     let out = Command::new("pkexec")
         .arg("sh")
         .arg("-c")
@@ -106,13 +110,25 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![start_service])
         .setup(|app| {
+            // Window + tray icon: set explicitly at runtime, otherwise the
+            // taskbar shows a blank placeholder when the app is not an
+            // installed desktop entry (e.g. running the AppImage).
+            let icon = tauri::image::Image::from_bytes(include_bytes!(
+                "../icons/icon.png"
+            ))
+            .map_err(|e| e.to_string())?
+            .to_owned();
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_icon(icon.clone());
+            }
+
             // System tray (v2: built in code, icon from the bundle defaults).
             let show =
                 MenuItem::with_id(app, "show", "Show dashboard", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
             let _tray = TrayIconBuilder::with_id("main")
-                .icon(app.default_window_icon().expect("bundle icon").clone())
+                .icon(icon)
                 .tooltip("ExFilTrap — DNS exfiltration monitor")
                 .menu(&menu)
                 .show_menu_on_left_click(false)

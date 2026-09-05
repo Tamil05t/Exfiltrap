@@ -191,7 +191,7 @@ bash tools/stress_test.sh                    # randomized stress suite
    service answers on `127.0.0.1:5050`. **If no service is running you get
    the waiting screen, not a dashboard.** Start a service first:
    ```bash
-   sudo .venv/bin/python -m exfiltrap.service --iface wlan0 --fresh-db   # fresh data
+   sudo .venv/bin/python -m exfiltrap.service --fresh-db   # fresh data, iface auto-detected
    # or, for live capture (needs the installed service or sudo):
    sudo .venv/bin/python -m exfiltrap.service --iface YOUR_INTERFACE
    ```
