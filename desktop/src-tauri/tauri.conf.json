@@ -7,8 +7,7 @@
     "beforeDevCommand": "",
     "devUrl": "http://127.0.0.1:5050",
     "beforeBuildCommand": "",
-    "frontendDist": "../../exfiltrap/dashboard/templates",
-    "withGlobalTauri": true
+    "frontendDist": "../../exfiltrap/dashboard/templates"
   },
   "app": {
     "windows": [
@@ -24,15 +23,23 @@
     ],
     "security": {
       "csp": null
-    }
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": true,
     "category": "Utility",
     "shortDescription": "DNS tunneling & slow-drip exfiltration detection",
     "longDescription": "ExFilTrap detects covert DNS tunneling and slow-drip data exfiltration with stateful session analysis and automated firewall mitigation. The desktop app bundles the detection engine and starts it with one root authorization.",
-    "resources": ["resources/exfiltrap-engine"],
-    "targets": ["deb", "appimage"],
-    "icon": ["icons/icon.png"]
+    "resources": [
+      "resources/exfiltrap-engine"
+    ],
+    "targets": [
+      "deb",
+      "appimage"
+    ],
+    "icon": [
+      "icons/icon.png"
+    ]
   }
 }
