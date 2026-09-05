@@ -57,8 +57,11 @@
     function go() { location.replace('http://127.0.0.1:5050'); }
     async function tauriApi() {
       // withGlobalTauri injects asynchronously after page load — wait for it.
+      // Tauri v2 exposes invoke under __TAURI__.core (v1 had it at the root).
       for (let i = 0; i < 20; i++) {
-        if (window.__TAURI__ && window.__TAURI__.invoke) return window.__TAURI__;
+        const t = window.__TAURI__;
+        const invoke = t && (t.core?.invoke ?? t.invoke);
+        if (invoke) return { invoke: (cmd, args) => invoke(cmd, args) };
         await new Promise(r => setTimeout(r, 150));
       }
       return null;
