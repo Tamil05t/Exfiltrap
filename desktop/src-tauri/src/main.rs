@@ -77,7 +77,10 @@ fn service_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
 /// Start the bundled detection engine as root via pkexec (polkit prompt).
 /// The service keeps running independently of the desktop app.
 #[tauri::command]
-fn start_service(app: tauri::AppHandle, iface: String) -> Result<String, String> {
+async fn start_service(
+    app: tauri::AppHandle,
+    iface: String,
+) -> Result<String, String> {
     if cfg!(target_os = "windows") {
         return Err("On Windows, run as Administrator: exfiltrap.exe service --iface <adapter>\n(or install ExFilTrap-Setup.exe — the service starts automatically)".to_string());
     }
@@ -93,12 +96,18 @@ fn start_service(app: tauri::AppHandle, iface: String) -> Result<String, String>
     } else {
         format!("nohup '{bin}' service --iface '{iface}' >/tmp/exfiltrap-service.log 2>&1 &")
     };
-    let out = Command::new("pkexec")
-        .arg("sh")
-        .arg("-c")
-        .arg(&script)
-        .output()
-        .map_err(|e| format!("pkexec failed: {e}"))?;
+    // pkexec blocks until the polkit dialog is answered — run it on a
+    // blocking worker so the webview UI never freezes.
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        Command::new("pkexec")
+            .arg("sh")
+            .arg("-c")
+            .arg(&script)
+            .output()
+            .map_err(|e| format!("pkexec failed: {e}"))
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))??;
     if out.status.success() {
         Ok("service start requested".into())
     } else {
@@ -107,6 +116,14 @@ fn start_service(app: tauri::AppHandle, iface: String) -> Result<String, String>
 }
 
 fn main() {
+    // WebKitGTK on Linux: the DMABUF renderer and the accelerated
+    // compositor are responsible for blank white windows and frozen,
+    // unclickable UIs on many GPU/driver combinations (NVIDIA, some Intel
+    // and virtual machines). Both switches are the established fix; they
+    // only affect this process and cost nothing on healthy systems.
+    std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![start_service])
         .setup(|app| {
