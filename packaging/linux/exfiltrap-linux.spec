@@ -29,6 +29,10 @@ a = Analysis(
     ],
     hiddenimports=[
         "sklearn", "scipy", "joblib",
+        # private modules referenced by the pickled RandomForest
+        "sklearn.ensemble", "sklearn.ensemble._forest",
+        "sklearn.tree", "sklearn.tree._classes", "sklearn.tree._utils",
+        "sklearn.utils._weight_vector", "sklearn.utils._seq_dataset",
         "exfiltrap.service",
         "exfiltrap.winservice",
         "exfiltrap.dashboard.app",
