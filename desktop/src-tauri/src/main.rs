@@ -1,22 +1,22 @@
-// ExFilTrap desktop wrapper (Tauri).
+// ExFilTrap desktop shell (Tauri v2) — ALL-IN-ONE product.
 //
-// ALL-IN-ONE product: this app BUNDLES the detection engine
-// (the `exfiltrap` service binary ships inside the package as a resource)
-// and can start it locally with a single root authorization (polkit/pkexec
-// on Linux). No Python, no source, no separate downloads.
-//
-// Flow: window opens on the bundled waiting screen -> "Start service"
-// invokes start_service() which runs the bundled engine via pkexec ->
-// the window auto-navigates to the dashboard when the API answers.
+// The detection engine (PyInstaller `exfiltrap` service binary) ships
+// INSIDE this package as a bundled resource. The waiting screen starts it
+// with one root authorization (pkexec) and the window auto-navigates to
+// the dashboard when the API answers.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::net::TcpStream;
+use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu};
+use tauri::menu::{Menu, MenuItem};
+use tauri::path::BaseDirectory;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent, TrayIconBuilder};
+use tauri::Manager;
 
 const API_HOST: &str = "127.0.0.1";
 const API_PORT: u16 = 5050;
@@ -26,54 +26,64 @@ fn api_up() -> bool {
 }
 
 fn show_main_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
     }
 }
 
-/// Navigate the shell window to the service dashboard once it is up.
 fn navigate_to_dashboard(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_window("main") {
-        let _ = window.eval("window.location.replace('http://127.0.0.1:5050');");
-        let _ = window.set_focus();
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.eval("window.location.replace('http://127.0.0.1:5050');");
+        let _ = w.set_focus();
     }
 }
 
-/// Locate the bundled service binary across packaging layouts
-/// (AppImage mount, deb resource dir, dev tree).
-fn service_binary(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+/// Locate the bundled engine across resource layouts and dev trees.
+fn service_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
     if let Ok(over) = std::env::var("EXFILTRAP_SERVICE_BIN") {
-        let p = std::path::PathBuf::from(over);
+        let p = PathBuf::from(over);
         if p.exists() {
             return Some(p);
         }
     }
     for candidate in [
+        "exfiltrap-engine/exfiltrap",
+        "resources/exfiltrap-engine/exfiltrap",
+        "exfiltrap-engine",
         "exfiltrap/exfiltrap",
-        "exfiltrap",
-        "bin/exfiltrap",
         "dist/exfiltrap/exfiltrap",
-        "dist/exfiltrap",
     ] {
-        if let Some(p) = app.path_resolver().resolve_resource(candidate) {
+        if let Ok(p) = app
+            .path()
+            .resolve(candidate, BaseDirectory::Resource)
+        {
             if p.exists() {
                 return Some(p);
+            }
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                let p = parent.join(candidate);
+                if p.exists() {
+                    return Some(p);
+                }
             }
         }
     }
     None
 }
 
-/// Start the bundled detection service as root via pkexec (polkit shows the
-/// authorization dialog). The service keeps running independently of the app.
+/// Start the bundled detection engine as root via pkexec (polkit prompt).
+/// The service keeps running independently of the desktop app.
 #[tauri::command]
 fn start_service(app: tauri::AppHandle, iface: String) -> Result<String, String> {
     if cfg!(target_os = "windows") {
         return Err("On Windows, run as Administrator: exfiltrap.exe service --iface <adapter>\n(or install ExFilTrap-Setup.exe — the service starts automatically)".to_string());
     }
-    let bin = service_binary(&app)
-        .ok_or_else(|| "bundled service binary not found in this package".to_string())?;
+    let bin = service_binary(&app).ok_or_else(|| {
+        "bundled detection engine not found in this package".to_string()
+    })?;
     let bin = bin.to_string_lossy().to_string();
     let iface = iface.replace(['\'', ';', '\\'], "");
     let script = format!(
@@ -93,29 +103,38 @@ fn start_service(app: tauri::AppHandle, iface: String) -> Result<String, String>
 }
 
 fn main() {
-    let show = CustomMenuItem::new("show".to_string(), "Show dashboard".to_string());
-    let quit = CustomMenuItem::new("quit".to_string(), "Quit".to_string());
-    let tray_menu = SystemTrayMenu::new().add_item(show).add_item(quit);
-    let tray = SystemTray::new()
-        .with_menu(tray_menu)
-        .with_tooltip("ExFilTrap — DNS exfiltration monitor");
-
     tauri::Builder::default()
-        .system_tray(tray)
         .invoke_handler(tauri::generate_handler![start_service])
-        .on_system_tray_event(|app, event| match event {
-            SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
-                "show" => show_main_window(app),
-                "quit" => app.exit(0),
-                _ => {}
-            },
-            SystemTrayEvent::LeftClick { .. } => show_main_window(app),
-            _ => {}
-        })
         .setup(|app| {
-            // Window is visible from the first frame on the bundled waiting
-            // page; navigate to the dashboard the moment the API answers.
-            let handle = app.app_handle();
+            // System tray (v2: built in code, icon from the bundle defaults).
+            let show =
+                MenuItem::with_id(app, "show", "Show dashboard", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let _tray = TrayIconBuilder::with_id("main")
+                .icon(app.default_window_icon().expect("bundle icon").clone())
+                .tooltip("ExFilTrap — DNS exfiltration monitor")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => show_main_window(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+
+            // Poll for the service; navigate to the dashboard when it's up.
+            let handle = app.handle().clone();
             thread::spawn(move || loop {
                 if api_up() {
                     navigate_to_dashboard(&handle);

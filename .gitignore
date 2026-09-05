@@ -18,3 +18,4 @@ desktop/src-tauri/target/
 desktop/src-tauri/gen/
 # python
 *.egg-info/
+desktop/src-tauri/resources/
