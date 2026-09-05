@@ -32,7 +32,7 @@
     "bundle": {
       "active": true,
       "identifier": "org.exfiltrap.desktop",
-      "category": "Security",
+      "category": "Network",
       "shortDescription": "DNS tunneling & slow-drip exfiltration detection",
       "longDescription": "ExFilTrap detects covert DNS tunneling and slow-drip data exfiltration with stateful session analysis and automated firewall mitigation. The desktop app bundles the detection engine and starts it with one root authorization.",
       "resources": [
