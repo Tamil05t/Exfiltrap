@@ -55,9 +55,16 @@ def _dispatch(cmd, rest):
         import importlib.util
         from pathlib import Path
 
-        spec = importlib.util.spec_from_file_location(
-            "run_evaluation", Path(__file__).parent.parent / "eval"
-            / "run_evaluation.py")
+        # Frozen builds (PyInstaller) unpack datas under sys._MEIPASS;
+        # source runs resolve relative to this file.
+        base = Path(getattr(sys, "_MEIPASS",
+                            Path(__file__).resolve().parent.parent))
+        eval_path = base / "eval" / "run_evaluation.py"
+        if not eval_path.exists():
+            eval_path = (Path(__file__).resolve().parent.parent / "eval"
+                         / "run_evaluation.py")
+        spec = importlib.util.spec_from_file_location("run_evaluation",
+                                                      eval_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod.main(rest)
