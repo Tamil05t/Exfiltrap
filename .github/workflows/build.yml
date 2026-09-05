@@ -40,6 +40,31 @@ jobs:
             dist/*.exe
           if-no-files-found: error
 
+  linux-service:
+    name: Linux service (standalone root binary)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build deps
+        run: pip install -r requirements.txt pyinstaller
+      - name: Build exfiltrap service (--onedir)
+        run: pyinstaller packaging/linux/exfiltrap-linux.spec --noconfirm --distpath dist --workpath build
+      - name: Smoke-test the packaged CLI
+        run: |
+          ./dist/exfiltrap/exfiltrap privileges
+          ./dist/exfiltrap/exfiltrap service --help
+      - name: Package tarball
+        run: tar -czf exfiltrap-linux-service.tar.gz -C dist exfiltrap
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: exfiltrap-linux-service
+          path: exfiltrap-linux-service.tar.gz
+          if-no-files-found: error
+
   linux-desktop:
     name: Linux desktop app (deb + AppImage)
     runs-on: ubuntu-22.04

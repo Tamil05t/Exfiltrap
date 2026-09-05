@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import sys
 
 log = logging.getLogger("exfiltrap.winservice")
@@ -44,9 +45,31 @@ def service_args() -> list[str]:
                 "--mitigation", cp.get("service", "mitigation", "log"),
                 ] + (["--execute"] if cp.getboolean(
                     "service", "execute", fallback=False) else [])
-    # No configuration yet: run the synthetic demo so the service is
-    # observable immediately after install instead of silently failing.
-    return ["--demo"]
+    # No configured interface: pick the first active adapter (root service
+    # runs live capture — the installed product is always live).
+    iface = cp.get("service", "iface", fallback=None) if cp.has_section("service") else None
+    if not iface or iface.lower() == "auto":
+        iface = _first_interface()
+    return ["--iface", iface,
+            "--mitigation", cp.get("service", "mitigation", "log")] + (
+            ["--execute"] if cp.getboolean("service", "execute",
+                                           fallback=False) else [])
+
+
+def _first_interface() -> str:
+    """First active non-loopback adapter (Windows)."""
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-NetAdapter | Where-Object Status -eq 'Up' | "
+             "Select-Object -First 1).Name"],
+            capture_output=True, text=True, timeout=15)
+        name = out.stdout.strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    return "Ethernet"
 
 
 def _get_service_class():

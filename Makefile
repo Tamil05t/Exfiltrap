@@ -1,20 +1,21 @@
 # ExfilTrap — developer and packaging entrypoints.
 SHELL := /bin/bash
 PY    := .venv/bin/python
+IFACE ?= $(shell ip -o -4 route show default 2>/dev/null | awk '{print $$5}' | head -1)
 
-.PHONY: help test train eval demo service dashboard privileges \
+.PHONY: help test train eval service dashboard privileges \
         install-linux uninstall-linux desktop-dev desktop-build
 
 help:
-	@echo "ExfilTrap targets:"
-	@echo "  make test           run the full pytest suite (no root needed)"
-	@echo "  make train          (re)train the Random Forest model"
-	@echo "  make eval           run the full evaluation (3 profiles + control)"
-	@echo "  make demo           fresh demo run + dashboard (no root needed)"
+	@echo "ExfilTrap targets (detection service runs as root):"
+	@echo "  make test                       full pytest suite"
+	@echo "  make train                      (re)train the Random Forest model"
+	@echo "  make eval                       evaluation (3 profiles + control)"
+	@echo "  make service IFACE=wlan0        run the live service (sudo)"
+	@echo "  make dashboard                  dashboard against the local DB"
 	@echo "  make install-linux IFACE=eth0   one-time privileged install"
 	@echo "  make uninstall-linux IFACE=eth0"
-	@echo "  make desktop-dev    run the Tauri desktop app against a local service"
-	@echo "  make desktop-build  build the desktop app (deb/rpm/AppImage bundles)"
+	@echo "  make desktop-build              Tauri desktop app (deb/rpm/AppImage)"
 
 test:
 	$(PY) -m pytest
@@ -25,11 +26,8 @@ train:
 eval:
 	$(PY) eval/run_evaluation.py
 
-demo:
-	$(PY) -m exfiltrap.service --demo --fresh-db --time-scale 120
-
 service:
-	$(PY) -m exfiltrap.service --iface $$(ip -o -4 route show default | awk '{print $$5}' | head -1)
+	sudo $(PY) -m exfiltrap.service --iface $(IFACE)
 
 dashboard:
 	$(PY) -m exfiltrap.dashboard
@@ -38,10 +36,10 @@ privileges:
 	$(PY) -m exfiltrap.privileges
 
 install-linux:
-	./tools/install_linux.sh $${IFACE:-eth0}
+	./tools/install_linux.sh $(IFACE)
 
 uninstall-linux:
-	./tools/uninstall_linux.sh $${IFACE:-eth0}
+	./tools/uninstall_linux.sh $(IFACE)
 
 desktop-dev:
 	cd desktop && npm install && npm run tauri dev

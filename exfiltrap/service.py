@@ -8,9 +8,8 @@ Architecture (the privilege-separation boundary):
   as the installed Windows Service.
 * It exposes a localhost-only REST API + the dashboard UI. The desktop app
   and any browser are plain unprivileged readers of that API.
-* ``--demo`` runs the same detection chain over generated traffic with
-  virtual timestamps paced to wall clock — a full live-looking demo on any
-  machine, no capture device, no root, safe for laptops and viva rooms.
+* Run it as root (or via the installed systemd/Windows service):
+  ``sudo python3 -m exfiltrap.service --iface <iface>``
 """
 
 from __future__ import annotations
@@ -157,63 +156,6 @@ class SystemdWatchdog:
             self._thread.join(timeout=2.0)
 
 
-def build_demo_stream(seed_offset: int = 0):
-    """A staged synthetic incident for demo mode.
-
-    Timeline (virtual seconds): benign baseline throughout; a slow-drip
-    tunnel starts at t=600; a fast tunnel bursts at t=3000; the drip keeps
-    running. Virtual time is paced to wall clock by the caller.
-    """
-    attacker = _import_tool("attacker_client")
-    benign_gen = _import_tool("benign_traffic_gen")
-
-    stream = list(benign_gen.generate_traffic(
-        duration=5400.0, qps=1.0, seed=config.BENIGN_RANDOM_SEED + seed_offset,
-    ))
-    stream += attacker.generate_traffic(
-        "slow-drip", attacker.make_sample_payload(seed=77),
-        duration=4800.0, start_time=600.0, seed=1337 + seed_offset,
-    )
-    stream += attacker.generate_traffic(
-        "fast", attacker.make_sample_payload(seed=78),
-        duration=60.0, start_time=3000.0, seed=1338 + seed_offset,
-    )
-    stream.sort(key=lambda r: r.query.timestamp)
-    return stream
-
-
-def run_demo_feed(pipeline: ExfilTrapPipeline, runtime: ServiceRuntime,
-                  stop_event: threading.Event, speedup: float) -> None:
-    """Replay the synthetic incident at ``speedup`` x wall-clock speed."""
-    stream = build_demo_stream()
-    prev_virtual = 0.0
-    prev_wall = time.time()
-    batch: list = []
-
-    def flush() -> None:
-        if batch:
-            pipeline.process_many(batch)  # vectorized scoring
-            for _ in batch:
-                runtime.count()
-            batch.clear()
-
-    for rec in stream:
-        if stop_event.is_set():
-            return
-        virtual = rec.query.timestamp
-        wall_target = prev_wall + (virtual - prev_virtual) / speedup
-        delay = wall_target - time.time()
-        if delay > 0.02:  # a real pause in the timeline: score what we have
-            flush()
-            time.sleep(min(delay, 2.0))
-        prev_virtual = virtual
-        prev_wall = wall_target
-        batch.append(rec.query)
-        if len(batch) >= 64:
-            flush()
-    flush()
-
-
 def run_capture_feed(pipeline: ExfilTrapPipeline, runtime: ServiceRuntime,
                      stop_event: threading.Event, iface: str,
                      batch_size: int = 64) -> None:
@@ -270,12 +212,8 @@ def main(argv: list[str] | None = None) -> int:
         prog="python3 -m exfiltrap.service",
         description="ExfilTrap detection service (capture + API + dashboard)",
     )
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--iface", help="network interface to capture (live mode)")
-    mode.add_argument("--demo", action="store_true",
-                      help="synthetic incident replay — no capture, no root")
-    parser.add_argument("--time-scale", type=float, default=60.0,
-                        help="demo speedup: virtual seconds per wall second")
+    parser.add_argument("--iface", required=True,
+                        help="network interface to capture (run as root)")
     parser.add_argument("--db", default=None)
     parser.add_argument("--flush-every", type=int, default=50,
                         help="rows buffered before a SQLite commit")
@@ -381,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
     state_path = (args.db or "exfiltrap.db") + ".state.json"
     if args.iface and st_mod.load_state(pipeline.tracker, state_path):
         log.info("restored session/baseline state from %s", state_path)
-    runtime = ServiceRuntime(mode=("demo" if args.demo else f"live:{args.iface}"))
+    runtime = ServiceRuntime(mode=f"live:{args.iface}")
     stop_event = threading.Event()
 
     def _request_stop(signum, _frame) -> None:
@@ -403,8 +341,8 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, _request_stop)
 
     feed = threading.Thread(
-        target=run_demo_feed if args.demo else run_capture_feed,
-        args=(pipeline, runtime, stop_event, args.time_scale if args.demo else args.iface),
+        target=run_capture_feed,
+        args=(pipeline, runtime, stop_event, args.iface),
         daemon=True,
     )
     feed.start()

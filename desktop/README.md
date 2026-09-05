@@ -31,9 +31,9 @@ keeps polling until it's back.
 
 ## Develop
 
-Terminal 1 — the service (demo mode needs no root):
+Terminal 1 — the detection service (as root, live capture):
 
-    ../.venv/bin/python -m exfiltrap.service --demo --time-scale 60
+    sudo ../.venv/bin/python -m exfiltrap.service --iface <your-interface>
 
 Terminal 2 — the desktop shell:
 

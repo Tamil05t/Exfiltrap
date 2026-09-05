@@ -62,7 +62,7 @@ prompt on Windows); afterwards it behaves like every installed application.
 | **Linux (any distro)** | scapy on any iface via `CAP_NET_RAW` | iptables, namespace-scoped and safety-gated | `sudo ./tools/install_linux.sh eth0` (once) | `systemctl start exfiltrap@eth0`, auto-starts at boot; dashboard needs no privileges |
 | **Linux desktop app** | — | — | `make desktop-build` → `.deb`/`.rpm`/**`.AppImage`** (AppImage runs on every distro, no install) | unprivileged tray app |
 | **Windows 10/11** | scapy + Npcap (bundled by installer) | `netsh advfirewall` rules prefixed `ExFilTrap-block-*` | `build_windows.bat` → Inno Setup `ExFilTrap-Setup.exe`: one UAC prompt, installs Npcap silently, registers auto-start service | service runs at boot like any app; desktop shortcut opens the dashboard unprivileged |
-| **Any machine, no install** | demo mode | log-only | — | `python -m exfiltrap.service --demo` replays a staged incident through the real pipeline — perfect for viva demos |
+| **Linux service binary (no Python)** | any iface via CAP_NET_RAW | iptables/log | download `exfiltrap-linux-service` artifact | `sudo ./exfiltrap service --iface wlan0` |
 
 ### Windows antivirus posture (real engineering, documented)
 
@@ -86,7 +86,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 make test            # 198 tests, no root needed
 make train           # trains data/model/rf_model.joblib (reproducible, seeded)
 make eval            # reproduces the results table
-make demo            # staged-incident service on http://127.0.0.1:5050
+sudo make service IFACE=wlan0   # live service on http://127.0.0.1:5050
 ```
 
 Single-entry CLI (what the packaged executables expose):
@@ -94,7 +94,7 @@ Single-entry CLI (what the packaged executables expose):
 ```bash
 python -m exfiltrap privileges        # what can this process do?
 python -m exfiltrap service --iface eth0   # live capture (needs service privileges)
-python -m exfiltrap service --demo         # root-free synthetic incident
+python -m exfiltrap service --iface wlan0  # live capture (sudo for raw sockets)
 python -m exfiltrap dashboard              # standalone UI against a DB
 python -m exfiltrap winservice install     # Windows only (elevated)
 ```
@@ -126,7 +126,7 @@ exfiltrap/risk_engine.py      M7  CONFIRMED > HIGH > MEDIUM > LOW rule table
 exfiltrap/mitigation.py       M8  iptables/netns │ netsh backends + factory
 exfiltrap/storage.py          M9a WAL SQLite, batched writes
 exfiltrap/dashboard/          M9b web UI (visibility-aware polling)
-exfiltrap/service.py          detection service + localhost REST API + demo
+exfiltrap/service.py          detection service + localhost REST API
 exfiltrap/winservice.py       Windows Service wrapper (pywin32, lazy import)
 exfiltrap/privileges.py       capability/admin discovery + CLI report
 exfiltrap/pipeline.py         full chain wiring, RF-only control switch
@@ -224,7 +224,7 @@ status header (mode, uptime, capture heartbeat) and pausable 5s refresh.
 
 - [x] 202 unit/integration tests pass (one root-only live-sniff skip).
 - [x] Full pipeline runs end-to-end (synthetic evaluation; live lab
-      procedure + scripts; service smoke-tested live in demo mode with HTTP
+      procedure + scripts; service smoke-tested live with HTTP
       API verified).
 - [x] **Live deployment validated on a real host** (namespace lab, real
       packets, real firewall): 1,857 packets processed, 664 payloads decoded
@@ -235,5 +235,5 @@ status header (mode, uptime, capture heartbeat) and pausable 5s refresh.
 - [x] Slow-drip recall 0.927 ≫ RF-only 0.346.
 - [x] Confirmed decoded payload samples in logs (`decoded_preview`).
 - [x] Mitigation proven namespace-scoped (iptables) / admin-gated (netsh).
-- [x] Runs as root, capability-bounded service, or unprivileged demo —
-      installer elevates once, daily use never does.
+- [x] Runs as root or capability-bounded service — installer elevates
+      once, daily use never does.

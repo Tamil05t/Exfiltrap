@@ -8,7 +8,7 @@
     body { font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
            background: #0b0f14; color: #c9d1d9; display: flex;
            min-height: 100vh; margin: 0; align-items: center; justify-content: center; }
-    .box { text-align: center; max-width: 36rem; padding: 2rem; }
+    .box { text-align: center; max-width: 38rem; padding: 2rem; }
     h1 { color: #58a6ff; font-size: 1.3rem; letter-spacing: .04em; }
     .dot { width: 14px; height: 14px; border-radius: 50%; background: #d29922;
            display: inline-block; margin-right: .5rem; animation: pulse 1.4s infinite; }
@@ -26,23 +26,22 @@
 </head>
 <body>
   <div class="box">
-    <h1><span class="dot" id="d"></span><span id="msg">ExFilTrap is starting…</span></h1>
+    <h1><span class="dot" id="d"></span><span id="msg">Waiting for the ExfilTrap detection service…</span></h1>
     <p>This desktop app is the monitor for the ExfilTrap detection service.
        It switches to the dashboard automatically as soon as the service is
-       reachable on <code>127.0.0.1:5050</code>.</p>
-    <p>If you have not started the service yet, run one of:</p>
-    <pre># root-free demo (fresh data, no capture)
-.venv/bin/python -m exfiltrap.service --demo --fresh-db
+       running on <code>127.0.0.1:5050</code>.</p>
+    <p><b>Start the service (as root):</b></p>
+    <pre># Linux — official service build (exfiltrap-linux-service artifact):
+sudo ./exfiltrap service --iface YOUR_INTERFACE
 
-# live capture with sudo (system python needs deps first)
-sudo python3 -m exfiltrap.service --iface YOUR_INTERFACE
-#   (system python: pip install --break-system-packages -r requirements.txt first)</pre>
+# or the installed systemd service:
+sudo systemctl start exfiltrap@YOUR_INTERFACE
+
+# Windows: the ExFilTrapSvc service starts automatically at boot;
+# manage it with:  exfiltrap.exe winservice start | stop</pre>
     <button onclick="go()">Open dashboard now</button>
   </div>
   <script>
-    // no-cors: resolves when ANY server answers on 5050 (opaque response),
-    // rejects on connection-refused — enough to detect "service is up"
-    // without depending on CORS headers.
     const url = 'http://127.0.0.1:5050/api/status';
     function up() {
       return fetch(url, { mode: 'no-cors', cache: 'no-store' })
@@ -50,7 +49,7 @@ sudo python3 -m exfiltrap.service --iface YOUR_INTERFACE
     }
     function go() { location.replace('http://127.0.0.1:5050'); }
     (async function poll() {
-      for (let i = 0; i < 120; i++) {
+      for (let i = 0; i < 240; i++) {
         if (await up()) {
           document.getElementById('d').classList.add('up');
           document.getElementById('msg').textContent =

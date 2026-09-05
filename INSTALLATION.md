@@ -10,7 +10,7 @@ make on any platform.
 
 | decision | default | where to change |
 |---|---|---|
-| **Which network interface to monitor** | Windows: read from `service.ini` (falls back to demo mode); Linux: the name you pass to `systemctl start exfiltrap@<iface>` | Windows: `%PROGRAMDATA%\ExFilTrap\service.ini` → `[service] iface = Ethernet` · Linux: the unit instance name |
+| **Which network interface to monitor** | Windows: read from `service.ini` (falls back to the first active adapter); Linux: the name you pass to `systemctl start exfiltrap@<iface>` | Windows: `%PROGRAMDATA%\ExFilTrap\service.ini` → `[service] iface = Ethernet` · Linux: the unit instance name |
 | **Whether mitigation actually blocks** | **log-only** (safe default: detections logged, nothing blocked) | Windows: `service.ini` → `mitigation = netsh` / `execute = yes` · Linux: systemd drop-in `Environment=EXFILTRAP_MITIGATION=iptables` + `EXFILTRAP_EXECUTE=1` |
 
 Everything else works out of the box with sane defaults. Optional knobs are
@@ -37,7 +37,7 @@ silently — no separate download.
    ```ini
    [%PROGRAMDATA%\ExFilTrap\service.ini]
    [service]
-   iface = Ethernet          ; run `exfiltrap.exe service --demo` to see interfaces, or check adapter names in ncpa.cpl
+   iface = Ethernet          ; adapter names: ncpa.cpl (or `ipconfig`)
    mitigation = log          ; log | netsh
    execute = no              ; yes = actually create firewall rules
    ```
@@ -47,10 +47,8 @@ silently — no separate download.
    `http://127.0.0.1:5050`).
 
 **Portable alternative (no install):** unzip the `exfiltrap/` onedir build
-and run `exfiltrap.exe service --demo` — a full synthetic-incident demo
-with zero capture rights needed. Live capture without the installer:
-`exfiltrap.exe service --iface Ethernet` from an elevated prompt (Npcap
-must already be installed).
+and run from an elevated prompt (Npcap required):
+`exfiltrap.exe service --iface Ethernet`.
 
 **Verify:** `exfiltrap.exe privileges` → `can_capture: true`;
 `curl http://127.0.0.1:5050/api/status` → `"mode": "live:..."`.
@@ -96,11 +94,6 @@ systemd unit granting **only** `CAP_NET_RAW`+`CAP_NET_ADMIN` (the service
 is never root), trains the model if needed, and enables the unit.
 
 Dashboard: any browser → `http://127.0.0.1:5050` (served by the service).
-
-**No-root demo/laptop mode:**
-```bash
-.venv/bin/python -m exfiltrap.service --demo      # synthetic incident + UI
-```
 
 **Uninstall:** `sudo ./tools/uninstall_linux.sh eth0`.
 
@@ -169,7 +162,7 @@ you'd tune first.
 # source checkout
 make test && make train && make eval
 sudo ./tools/install_linux.sh eth0 && sudo systemctl start exfiltrap@eth0
-make demo                                    # root-free demo + dashboard
+sudo make service IFACE=wlan0                # live service + dashboard
 bash tools/deploy_live.sh                    # full isolated live-fire test
 bash tools/stress_test.sh                    # randomized stress suite
 ```
@@ -198,7 +191,7 @@ bash tools/stress_test.sh                    # randomized stress suite
    service answers on `127.0.0.1:5050`. **If no service is running you get
    the waiting screen, not a dashboard.** Start a service first:
    ```bash
-   .venv/bin/python -m exfiltrap.service --demo --fresh-db   # root-free, fresh data
+   sudo .venv/bin/python -m exfiltrap.service --iface wlan0 --fresh-db   # fresh data
    # or, for live capture (needs the installed service or sudo):
    sudo .venv/bin/python -m exfiltrap.service --iface YOUR_INTERFACE
    ```
@@ -213,7 +206,7 @@ password (`systemctl start exfiltrap@<iface>`).
 
 **Dashboard shows old test runs / the unblock button does nothing** —
 upgrade to ≥ this version: `--fresh-db` starts with an empty database
-(`make demo` includes it), the Blocked tab reads live data, and Unblock now
+(`--fresh-db`), the Blocked tab reads live data, and Unblock now
 works in every mode (it clears the block row; with an active firewall
 backend it also removes the actual rule). Old test databases can simply be
 deleted: `rm data/exfiltrap.db*`.
