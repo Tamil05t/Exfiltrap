@@ -30,6 +30,9 @@ a = Analysis(
          "exfiltrap/dashboard/templates"),
         (str(ROOT / "data" / "tranco_top_1m_sample.csv"), "data"),
         (str(ROOT / "data" / "model" / "rf_model.joblib"), "data/model"),
+        (str(ROOT / "eval" / "run_evaluation.py"), "eval"),
+        (str(ROOT / "tools" / "attacker_client.py"), "tools"),
+        (str(ROOT / "tools" / "benign_traffic_gen.py"), "tools"),
     ],
     hiddenimports=[
         "sklearn", "scipy", "joblib",
