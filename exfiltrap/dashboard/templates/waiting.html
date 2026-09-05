@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ExFilTrap — starting</title>
+  <meta http-equiv="refresh" content="6" url="http://127.0.0.1:5050">
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+           background: #0b0f14; color: #c9d1d9; display: flex;
+           min-height: 100vh; margin: 0; align-items: center; justify-content: center; }
+    .box { text-align: center; max-width: 34rem; padding: 2rem; }
+    h1 { color: #58a6ff; font-size: 1.3rem; letter-spacing: .04em; }
+    .dot { width: 14px; height: 14px; border-radius: 50%; background: #d29922;
+           display: inline-block; margin-right: .5rem; animation: pulse 1.4s infinite; }
+    @keyframes pulse { 50% { opacity: .25; } }
+    p { color: #8b98a5; line-height: 1.6; }
+    code, pre { font-family: ui-monospace, Menlo, Consolas, monospace;
+                background: #121821; border: 1px solid #212b38; border-radius: 6px;
+                padding: .15rem .45rem; font-size: .82rem; color: #c9d1d9; }
+    pre { text-align: left; padding: .8rem 1rem; overflow-x: auto; }
+    button { margin-top: 1rem; background: #58a6ff; color: #0b0f14; border: 0;
+             border-radius: 8px; padding: .55rem 1.2rem; font-size: .9rem;
+             font-weight: 600; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1><span class="dot"></span>ExFilTrap is starting…</h1>
+    <p>This desktop app is the monitor for the ExfilTrap detection service.
+       The window opens automatically as soon as the service answers on
+       <code>127.0.0.1:5050</code> — this page retries every few seconds.</p>
+    <p>If you have not started the service yet, run one of:</p>
+    <pre># root-free demo (recommended first run)
+python3 -m exfiltrap.service --demo --fresh-db
+
+# live capture (needs the installed service or sudo)
+python3 -m exfiltrap.service --iface YOUR_INTERFACE</pre>
+    <button onclick="location.replace('http://127.0.0.1:5050')">Retry now</button>
+  </div>
+</body>
+</html>

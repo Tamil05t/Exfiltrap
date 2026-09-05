@@ -370,3 +370,53 @@ class TestUnblockEndpoint:
         r = c.post("/api/unblock", json={"src_ip": "10.0.0.9"})
         assert r.status_code == 200 and r.json["ok"] is True
         assert calls == [{"src_ip": "10.0.0.9"}]
+
+
+class TestUnblockFlow:
+    def test_remove_block(self, tmp_path):
+        store = Storage(tmp_path / "u.db")
+        store.log_block(1.0, "10.0.0.9", "HIGH")
+        assert store.remove_block("10.0.0.9") is True
+        assert store.remove_block("10.0.0.9") is False
+        assert store.blocked_list() == []
+        store.close()
+
+    def test_unblock_endpoint_without_provider_clears_row(self, tmp_path):
+        from exfiltrap.dashboard.app import create_app
+
+        store = Storage(tmp_path / "u2.db")
+        store.log_block(1.0, "10.0.0.9", "HIGH")
+        store.recent_queries(1)  # flush
+        app = create_app(tmp_path / "u2.db")
+        c = app.test_client()
+        r = c.post("/api/unblock", json={"src_ip": "10.0.0.9"})
+        assert r.status_code == 200 and r.json["ok"] is True
+        assert c.get("/api/blocked").json["blocked"] == []
+        store.close()
+
+    def test_blocked_endpoint_live(self, tmp_path):
+        from exfiltrap.dashboard.app import create_app
+
+        store = Storage(tmp_path / "u3.db")
+        store.log_block(1.0, "10.0.0.7", "HIGH")
+        store.recent_queries(1)
+        c = create_app(tmp_path / "u3.db").test_client()
+        body = c.get("/api/blocked").json["blocked"]
+        assert body == [{"src_ip": "10.0.0.7", "ts": 1.0, "risk_level": "HIGH"}]
+        store.close()
+
+    def test_service_unblock_provider_removes_row(self, tmp_path):
+        # Service-mode _unblock: policy unblock + row removal (row is truth).
+        from exfiltrap.mitigation import LogOnlyMitigation
+        from exfiltrap.policy import make_policy
+        from exfiltrap.storage import Storage
+
+        store = Storage(tmp_path / "u4.db")
+        pol = make_policy(LogOnlyMitigation())
+        pol.block_ip("10.0.0.5")
+        store.log_block(1.0, "10.0.0.5", "HIGH")
+
+        ok = pol.unblock("10.0.0.5")
+        removed = store.remove_block("10.0.0.5")
+        assert ok and removed and store.blocked_list() == []
+        store.close()

@@ -33,6 +33,16 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Navigate the shell window to the service dashboard once it is up.
+fn navigate_to_dashboard(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_window("main") {
+        let _ = window.eval(
+            "window.location.replace('http://127.0.0.1:5050');",
+        );
+        let _ = window.set_focus();
+    }
+}
+
 fn main() {
     let show = CustomMenuItem::new("show".to_string(), "Show dashboard".to_string());
     let quit = CustomMenuItem::new("quit".to_string(), "Quit".to_string());
@@ -55,12 +65,13 @@ fn main() {
             _ => {}
         })
         .setup(|app| {
-            // Gate the window on service availability so users never see a
-            // connection-error page; the tray icon is present either way.
+            // The window starts on the bundled waiting page (visible from
+            // the first frame) and navigates to the dashboard the moment
+            // the detection service answers on the local API.
             let handle = app.app_handle();
             thread::spawn(move || loop {
                 if api_up() {
-                    show_main_window(&handle);
+                    navigate_to_dashboard(&handle);
                     break;
                 }
                 thread::sleep(Duration::from_secs(2));

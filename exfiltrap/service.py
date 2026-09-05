@@ -279,6 +279,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--i-know-this-is-isolated", action="store_true",
                         help="explicit override for host-firewall paths (Linux)")
     parser.add_argument("--classifier", default=None)
+    parser.add_argument("--fresh-db", action="store_true",
+                        help="start with an empty database (removes old runs)")
     parser.add_argument("--block-ttl", type=float, default=3600.0,
                         help="seconds before a block auto-unbans (0=never)")
     parser.add_argument("--allowlist", default="",
@@ -301,6 +303,18 @@ def main(argv: list[str] | None = None) -> int:
         args.mitigation = os.environ["EXFILTRAP_MITIGATION"]
     if args.alert is None:
         args.alert = os.environ.get("EXFILTRAP_ALERT", "none")
+    if not args.db:
+        args.db = config.DB_PATH
+    if args.fresh_db:
+        import glob as _glob
+
+        for stale in [args.db] + _glob.glob(args.db + "-*") + \
+                     [str(Path(args.db).with_suffix("")) + ".state.json"]:
+            try:
+                os.remove(stale)
+                print(f"fresh-db: removed {stale}")
+            except OSError:
+                pass
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -320,10 +334,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    mitigation = None
-    if args.mitigation != "log":
-        from exfiltrap.mitigation import make_mitigation
+    from exfiltrap.mitigation import LogOnlyMitigation, make_mitigation
 
+    if args.mitigation == "log":
+        # Log-only backend: detections and block decisions are recorded
+        # (and reversible from the dashboard) without touching any firewall.
+        mitigation = LogOnlyMitigation()
+    else:
         mitigation = make_mitigation(
             args.mitigation if args.mitigation != "auto" else "auto",
             dry_run=not args.execute,
@@ -336,14 +353,13 @@ def main(argv: list[str] | None = None) -> int:
     from exfiltrap import session_tracker as st_mod
 
     alerter = make_alerter(args.alert)
-    if mitigation is not None:
-        from exfiltrap.policy import make_policy
+    from exfiltrap.policy import make_policy
 
-        mitigation = make_policy(
-            mitigation,
-            allowlist=[ip for ip in args.allowlist.split(",") if ip],
-            block_ttl=args.block_ttl or 1e18,
-        )
+    mitigation = make_policy(
+        mitigation,
+        allowlist=[ip for ip in args.allowlist.split(",") if ip],
+        block_ttl=args.block_ttl or 1e18,
+    )
     pipeline = ExfilTrapPipeline(
         classifier_path=args.classifier,
         mitigation=mitigation,
@@ -423,12 +439,13 @@ def main(argv: list[str] | None = None) -> int:
 
     def _unblock(payload: dict) -> bool:
         ip = (payload or {}).get("src_ip", "")
-        if mitigation is None or not hasattr(mitigation, "unblock"):
-            return False
-        ok = mitigation.unblock(ip)
-        if ok:
-            storage.log_block(time.time(), ip, "UNBLOCKED")
-        return ok
+        ok = True
+        try:
+            ok = bool(mitigation.unblock(ip))
+        except Exception as exc:  # noqa: BLE001 — the list must stay operable
+            log.warning("firewall unblock failed for %s: %s", ip, exc)
+        # The blocked-list UI reads this table; it is the source of truth.
+        return storage.remove_block(ip) or ok
 
     app = create_app(args.db, status_provider=runtime.status,
                      sessions_provider=_sessions_snapshot,

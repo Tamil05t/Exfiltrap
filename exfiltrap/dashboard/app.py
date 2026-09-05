@@ -70,16 +70,26 @@ def create_app(db_path=None, status_provider=None, sessions_provider=None,
         risk = request.args.get("risk") or None
         return jsonify(queries=storage.recent_queries_filtered(limit, risk))
 
+    @app.route("/api/blocked")
+    def blocked():
+        storage: Storage = app.config["STORAGE"]
+        return jsonify(blocked=storage.blocked_list())
+
     @app.route("/api/unblock", methods=["POST"])
     def unblock():
         # Localhost-bound console action (the service API never leaves the
         # machine); a deployment exposing it remotely must front it with auth.
-        if unblock_provider is None:
-            return jsonify(error="mitigation not active"), 400
         from flask import request
 
-        ok = unblock_provider(request.get_json(silent=True) or {})
-        return jsonify(ok=ok), (200 if ok else 400)
+        ip = (request.get_json(silent=True) or {}).get("src_ip", "")
+        if unblock_provider is not None:
+            ok = unblock_provider({"src_ip": ip})
+        else:
+            # Standalone dashboard: no firewall to touch, but the list must
+            # still be operable — the DB row is the UI's source of truth.
+            storage: Storage = app.config["STORAGE"]
+            ok = storage.remove_block(ip)
+        return jsonify(ok=bool(ok)), (200 if ok else 400)
 
     @app.route("/api/events")
     def events():

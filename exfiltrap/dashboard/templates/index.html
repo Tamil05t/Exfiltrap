@@ -415,8 +415,10 @@
        '<tr><td colspan="7" class="muted">no sessions — standalone dashboard? run the service for live sessions</td></tr>';
    }
 
-   function loadBlocked() {
-     const rows = JSON.parse($("blocked-json").textContent);
+   async function loadBlocked() {
+     const d = await jget("/api/blocked");
+     if (!d) return;
+     const rows = d.blocked;
      $("b-table").querySelector("tbody").innerHTML = rows.map((x) => `
        <tr><td class="mono">${esc(x.src_ip)}</td><td>${fmtT(x.ts)}</td>
        <td><span class="risk risk-${x.risk_level}">${x.risk_level}</span></td>

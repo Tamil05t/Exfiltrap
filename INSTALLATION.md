@@ -169,3 +169,47 @@ make demo                                    # root-free demo + dashboard
 bash tools/deploy_live.sh                    # full isolated live-fire test
 bash tools/stress_test.sh                    # randomized stress suite
 ```
+
+---
+
+## 9. Desktop app (AppImage/deb) troubleshooting
+
+**Nothing happens when I open the AppImage** — work through this list in order:
+
+1. Mark it executable: `chmod +x ExFilTrap-*.AppImage`
+2. FUSE is required (Ubuntu 22.04+ no longer ships it):
+   `sudo apt install libfuse2`
+3. Still nothing? Extract-and-run bypasses FUSE entirely:
+   ```bash
+   ./ExFilTrap-*.AppImage --appimage-extract
+   ./squashfs-root/AppRun
+   ```
+4. WebKitGTK runtime libraries (the app renders with the system webview):
+   ```bash
+   sudo apt install libwebkit2gtk-4.0-37 libgtk-3-0 libayatana-appindicator3-1
+   ```
+5. **Important — the window behavior:** the desktop app is the *monitor*
+   for the detection service. On launch it shows a "ExfilTrap is starting…"
+   screen and automatically switches to the dashboard the moment the
+   service answers on `127.0.0.1:5050`. **If no service is running you get
+   the waiting screen, not a dashboard.** Start a service first:
+   ```bash
+   python3 -m exfiltrap.service --demo --fresh-db   # root-free, fresh data
+   # or, for live capture (needs the installed service or sudo):
+   sudo python3 -m exfiltrap.service --iface YOUR_INTERFACE
+   ```
+   Find your interface name with `ip -br link` (e.g. `eth0`, `wlan0`, `enp3s0`).
+6. The `.deb` installs the same desktop app system-wide (Start menu entry);
+   the service itself is installed via `tools/install_linux.sh` (section 3c).
+
+**Live capture "from source" fails with a privileges error** — that is by
+design: packet capture needs elevated rights. Either run interactively with
+`sudo` (as above), or use the one-time installer so daily use needs no
+password (`systemctl start exfiltrap@<iface>`).
+
+**Dashboard shows old test runs / the unblock button does nothing** —
+upgrade to ≥ this version: `--fresh-db` starts with an empty database
+(`make demo` includes it), the Blocked tab reads live data, and Unblock now
+works in every mode (it clears the block row; with an active firewall
+backend it also removes the actual rule). Old test databases can simply be
+deleted: `rm data/exfiltrap.db*`.

@@ -13,13 +13,13 @@
   "tauri": {
     "windows": [
       {
-        "title": "ExFilTrap — DNS Exfiltration Monitor",
+        "title": "ExFilTrap \u2014 DNS Exfiltration Monitor",
         "width": 1280,
         "height": 860,
         "minWidth": 900,
         "minHeight": 600,
-        "visible": false,
-        "url": "http://127.0.0.1:5050"
+        "visible": true,
+        "url": "waiting.html"
       }
     ],
     "security": {
@@ -30,13 +30,20 @@
       "iconAsTemplate": false
     },
     "bundle": {
-    "active": true,
-    "identifier": "org.exfiltrap.desktop",
-    "category": "Utility",
-    "shortDescription": "DNS tunneling & slow-drip exfiltration detection",
-    "longDescription": "ExFilTrap detects covert DNS tunneling and slow-drip data exfiltration with stateful session analysis and automated firewall mitigation. This is the unprivileged desktop monitor for the ExFilTrap service.",
-    "targets": ["deb", "appimage", "msi", "nsis"],
-    "icon": ["icons/icon.png"]
+      "active": true,
+      "identifier": "org.exfiltrap.desktop",
+      "category": "Utility",
+      "shortDescription": "DNS tunneling & slow-drip exfiltration detection",
+      "longDescription": "ExFilTrap detects covert DNS tunneling and slow-drip data exfiltration with stateful session analysis and automated firewall mitigation. This is the unprivileged desktop monitor for the ExFilTrap service.",
+      "targets": [
+        "deb",
+        "appimage",
+        "msi",
+        "nsis"
+      ],
+      "icon": [
+        "icons/icon.png"
+      ]
     }
   }
 }

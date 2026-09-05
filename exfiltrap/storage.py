@@ -59,9 +59,17 @@ class Storage:
         self.flush_every = max(1, flush_every)
         self._lock = threading.Lock()
         self._pending = 0
-        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        # isolation_level=None = autocommit: multiple connections (the
+        # service's pipeline sink AND the dashboard/API) share this file,
+        # and a lingering implicit transaction on one would lock the other
+        # out (observed live). WAL + synchronous=NORMAL keeps autocommit
+        # cheap; busy_timeout makes brief writer collisions wait, not fail.
+        self._conn = sqlite3.connect(
+            self.db_path, check_same_thread=False, timeout=30.0,
+            isolation_level=None)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
@@ -142,6 +150,15 @@ class Storage:
         keys = ("ts", "src_ip", "qname", "risk_level", "reasons", "confirmed",
                 "decoded_preview")
         return [dict(zip(keys, r)) for r in rows]
+
+    def remove_block(self, ip: str) -> bool:
+        """Remove a block row (dashboard unblock). True if a row was removed."""
+        with self._lock:
+            self._flush_locked()
+            cur = self._conn.execute(
+                "DELETE FROM blocked_ips WHERE src_ip = ?", (ip,))
+            self._conn.commit()
+            return cur.rowcount > 0
 
     def blocked_list(self) -> list[dict]:
         with self._lock:
