@@ -28,6 +28,7 @@ npm install
 npx tauri icon src-tauri/icons/icon-source.png
 
 echo "== 4. build (deb + AppImage)"
+export EXCLUDE_LIBRARIES="libwebkit2gtk-4.1.so.100 libjavascriptcoregtk-4.1.so.0 libsoup-3.0.so.0 libgtk-3.so.0 libgdk-3.so.0 libglib-2.0.so.0 libgobject-2.0.so.0 libgio-2.0.so.0 libgmodule-2.0.so.0 libgdk_pixbuf-2.0.so.0 libpango-1.0.so.0 libpangocairo-1.0.so.0 libpangoft2-1.0.so.0 libharfbuzz.so.0 libharfbuzz-subpage.so.0 libatk-1.0.so.0 libatk-bridge-2.0.so.0 libcairo.so.2 libcairo-gobject.so.2 libepoxy.so.0"
 npm run tauri build
 
 echo "Bundles:"

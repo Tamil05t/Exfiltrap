@@ -196,7 +196,8 @@ bash tools/stress_test.sh                    # randomized stress suite
    ```
 4. WebKitGTK runtime libraries (the app renders with the system webview):
    ```bash
-   sudo apt install libwebkit2gtk-4.0-37 libgtk-3-0 libayatana-appindicator3-1
+   sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 \
+     || sudo apt install libwebkit2gtk-4.0-37 libgtk-3-0 libayatana-appindicator3-1
    ```
 5. **Important — the window behavior:** the desktop app is the *monitor*
    for the detection service. On launch it shows a "ExfilTrap is starting…"
