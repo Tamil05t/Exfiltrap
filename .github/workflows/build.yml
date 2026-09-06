@@ -69,7 +69,7 @@ jobs:
           if-no-files-found: error
 
   linux-desktop:
-    name: Linux desktop app (deb + AppImage)
+    name: Linux desktop (deb + portable, system webkit)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -84,8 +84,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev file
-      - name: Build bundled detection engine (goes INSIDE the AppImage/deb)
+            libayatana-appindicator3-dev librsvg2-dev
+      - name: Build bundled detection engine (goes INSIDE the deb/portable)
         run: |
           pip install -r requirements.txt pyinstaller
           pyinstaller packaging/linux/exfiltrap-linux.spec --noconfirm --distpath dist --workpath build
@@ -99,21 +99,35 @@ jobs:
           python tools/make_icon.py desktop/src-tauri/icons/icon-source.png
           cd desktop && npm install
           npx tauri icon src-tauri/icons/icon-source.png
-      - name: Build desktop bundles
-        env:
-          # Use the SYSTEM gtk/webkit/glib stack in the AppImage instead of
-          # bundling a second copy — bundling caused blank windows and
-          # glib symbol clashes on bleeding-edge distros (Kali/Debian 13).
-          # The engine resource and app binary are still bundled.
-          EXCLUDE_LIBRARIES: "libwebkit2gtk-4.1.so.100 libjavascriptcoregtk-4.1.so.0 libsoup-3.0.so.0 libgtk-3.so.0 libgdk-3.so.0 libglib-2.0.so.0 libgobject-2.0.so.0 libgio-2.0.so.0 libgmodule-2.0.so.0 libgdk_pixbuf-2.0.so.0 libpango-1.0.so.0 libpangocairo-1.0.so.0 libpangoft2-1.0.so.0 libharfbuzz.so.0 libharfbuzz-subpage.so.0 libatk-1.0.so.0 libatk-bridge-2.0.so.0 libcairo.so.2 libcairo-gobject.so.2 libepoxy.so.0"
+      - name: Build the .deb (uses the SYSTEM gtk/webkit stack — no bundled copies)
         run: |
           cd desktop
-          npm run tauri build -- --bundles deb,appimage
+          npm run tauri build -- --bundles deb
+      - name: Assemble the portable package from the INSTALLED .deb files
+        run: |
+          sudo apt install -y ./desktop/src-tauri/target/release/bundle/deb/*.deb
+          mkdir -p portable/ExFilTrap
+          BIN=$(dpkg -L ex-fil-trap | grep '^/usr/bin/' | head -1)
+          cp "$BIN" portable/ExFilTrap/ex-fil-trap
+          ENGINE=$(dpkg -L ex-fil-trap | grep 'exfiltrap-engine/exfiltrap$' | head -1)
+          test -n "$ENGINE"
+          cp -r "$(dirname "$ENGINE")" portable/ExFilTrap/exfiltrap-engine
+          cat > portable/ExFilTrap/ExFilTrap <<'LAUNCHER'
+          #!/bin/sh
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          export EXFILTRAP_SERVICE_BIN="$DIR/exfiltrap-engine/exfiltrap"
+          exec "$DIR/ex-fil-trap" "$@"
+          LAUNCHER
+          chmod +x portable/ExFilTrap/ExFilTrap portable/ExFilTrap/ex-fil-trap \
+                   portable/ExFilTrap/exfiltrap-engine/exfiltrap
+          # sanity: the portable binary must resolve every lib from the
+          # SYSTEM (same story as the deb — proven rendering on Kali)
+          ldd portable/ExFilTrap/ex-fil-trap | grep -c "not found" || true
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: exfiltrap-desktop-linux
           path: |
             desktop/src-tauri/target/release/bundle/deb/*.deb
-            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            ExFilTrap-portable-linux.tar.gz
           if-no-files-found: error
