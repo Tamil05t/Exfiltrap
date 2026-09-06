@@ -132,6 +132,6 @@ jobs:
         with:
           name: exfiltrap-desktop-linux
           path: |
-            ExFilTrap_1.1.0_amd64.deb
+            desktop/src-tauri/target/release/bundle/deb/*.deb
             ExFilTrap-portable-linux.tar.gz
           if-no-files-found: error
