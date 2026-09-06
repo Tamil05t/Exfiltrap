@@ -213,8 +213,9 @@ def main(argv: list[str] | None = None) -> int:
         description="ExfilTrap detection service (capture + API + dashboard)",
     )
     parser.add_argument("--iface", default=None,
-                        help="interface to capture (default: auto-detect the "
-                             "default-route / internet interface)")
+                        help="interface to capture (default: 'any' — DNS on "
+                             "every interface, including the local resolver "
+                             "stub on loopback)")
     parser.add_argument("--db", default=None)
     parser.add_argument("--flush-every", type=int, default=50,
                         help="rows buffered before a SQLite commit")
@@ -240,14 +241,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
 
-    # Smart interface selection: the default-route interface IS the one
-    # carrying internet traffic (eth0, wlan0, wlo1, ...), so we find it
-    # instead of asking the operator to guess a name.
-    if not args.iface or args.iface.lower() in ("auto", "default"):
+    # Smart capture selection: DNS can flow over ANY interface — the wifi
+    #/ethernet uplink, AND the local resolver stub on loopback (systemd-
+    # resolved answers apps from 127.0.0.53 over `lo` on most modern
+    # distros). Watching a single interface silently misses the stub, so
+    # the default is capturing everywhere ("any"); explicit --iface narrows it.
+    if not args.iface or args.iface.lower() in ("any", "all"):
+        args.iface = "any"
+        print("capturing DNS on ALL interfaces (any) — includes the local "
+              "resolver stub on loopback")
+    elif args.iface.lower() in ("auto", "default"):
         from exfiltrap import netif
 
-        args.iface = netif.default_interface()
-        if not args.iface:
+        detected = netif.default_interface()
+        if not detected:
             print(
                 "could not auto-detect the internet interface.\n"
                 "Available interfaces:\n  "
@@ -255,6 +262,7 @@ def main(argv: list[str] | None = None) -> int:
                 + "\nPass one explicitly with --iface."
             )
             return 2
+        args.iface = detected
         print(f"auto-detected internet interface: {args.iface}")
 
     # Environment fallbacks used by the systemd unit (packaging/linux):

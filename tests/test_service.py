@@ -52,16 +52,15 @@ class TestServiceApi:
         assert b"tab-overview" in r.data       # tabbed SPA shell
         assert b"blocked-json" in r.data       # embedded bootstrap data
 
-    def test_missing_iface_auto_detect_failure_is_clean(self, monkeypatch, capsys):
-        # Without --iface the service auto-detects the default-route
-        # interface; when detection fails it must exit 2 with the candidate
-        # list instead of guessing.
+    def test_explicit_auto_iface_detection_failure_is_clean(self, monkeypatch, capsys):
+        # --iface auto uses default-route detection; on failure it must exit
+        # 2 with the candidate list instead of guessing.
         from exfiltrap import netif, service
 
         monkeypatch.setattr(netif, "default_interface", lambda: None)
         monkeypatch.setattr(service.privileges,
                             "has_capture_capability", lambda: True)
-        assert service.main([]) == 2
+        assert service.main(["--iface", "auto"]) == 2
         assert "Available interfaces" in capsys.readouterr().out
 
 

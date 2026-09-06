@@ -86,7 +86,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 make test            # 198 tests, no root needed
 make train           # trains data/model/rf_model.joblib (reproducible, seeded)
 make eval            # reproduces the results table
-sudo make service               # live service (iface auto-detected)
+sudo make service               # live service — captures DNS on ALL interfaces
 ```
 
 Single-entry CLI (what the packaged executables expose):
@@ -94,7 +94,7 @@ Single-entry CLI (what the packaged executables expose):
 ```bash
 python -m exfiltrap privileges        # what can this process do?
 python -m exfiltrap service --iface eth0   # live capture (needs service privileges)
-python -m exfiltrap service --iface wlan0  # live capture (sudo for raw sockets)
+sudo python -m exfiltrap service           # live capture on all interfaces
 python -m exfiltrap dashboard              # standalone UI against a DB
 python -m exfiltrap winservice install     # Windows only (elevated)
 ```
