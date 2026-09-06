@@ -41,6 +41,16 @@ BEACON_MIN_QUERIES = 20
 # require the session mean to also exceed the population median by this
 # ratio before calling it a slow-drip.
 SESSION_ELEVATION_RATIO = 1.8
+# M3c DOMAIN-LEVEL detection (the signals that survive real-host traffic
+# mixing, per TunnelEye/DLAZE): many high-entropy labels under ONE base
+# domain inside a short window = tunnel-grade domain velocity; and a
+# single base domain queried at machine-regular intervals = C2 beacon.
+DOMAIN_VELOCITY_COUNT = 15      # queries to one base domain...
+DOMAIN_VELOCITY_WINDOW = 60.0   # ...within this many seconds...
+DOMAIN_VELOCITY_MIN_ENTROPY = 3.0  # ...with labels this entropy or higher
+DOMAIN_BEACON_MIN_QUERIES = 20  # per-domain observations before beacon test
+DOMAIN_BEACON_MAX_CV = 0.25
+DOMAIN_BEACON_MIN_INTERVAL = 5.0
 # ASSUMPTION: intervals below this CV count as machine-periodic. 0.25 sits
 # far below Poisson noise and above realistic timer jitter.
 BEACON_MAX_CV = 0.25

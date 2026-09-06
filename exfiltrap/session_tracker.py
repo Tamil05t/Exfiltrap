@@ -10,11 +10,13 @@ resolver traffic stays dominated by short, low-entropy labels.
 from __future__ import annotations
 
 import threading
+import statistics
 from collections import deque
 from dataclasses import dataclass
 
 from exfiltrap import config
 from exfiltrap.baseline_engine import BaselineEngine
+from exfiltrap.features import base_domain
 
 
 @dataclass
@@ -30,6 +32,8 @@ class SessionState:
     last_timestamp: float
     beacon_candidate: bool = False
     interval_cv: float | None = None
+    velocity_candidate: bool = False
+    domain_beacon: bool = False
     resp_answer_bytes: int = 0
     resp_flag: bool = False
 
@@ -83,6 +87,12 @@ class SessionTracker:
             warmup=config.BASELINE_WARMUP)
         self._sessions: dict[str, deque[tuple[float, float]]] = {}
         self._resp_sessions: dict[str, deque[tuple[float, float]]] = {}
+        # Domain-level tracking: (src, base_domain) -> timestamps. The
+        # per-source session mixes attack + legitimate traffic on a real
+        # host (defeating mass/timing per source), but the DOMAIN view
+        # isolates the tunnel: one base domain receiving many high-entropy
+        # labels at machine-regular intervals.
+        self._domain_times: dict[tuple[str, str], deque[float]] = {}
         # Capture, API and maintenance threads all touch the deques; the
         # stress test caught a live "deque mutated during iteration" race
         # between them, so every access is serialized.
@@ -95,13 +105,16 @@ class SessionTracker:
         return estimated_bytes * weight
 
     def update(
-        self, src_ip: str, timestamp: float, estimated_bytes: float, entropy: float
+        self, src_ip: str, timestamp: float, estimated_bytes: float, entropy: float,
+        qname: str | None = None,
     ) -> SessionState:
         """Fold one query into its source's window; returns the new state."""
         with self._lock:
-            return self._update_locked(src_ip, timestamp, estimated_bytes, entropy)
+            return self._update_locked(src_ip, timestamp, estimated_bytes,
+                                       entropy, qname)
 
-    def _update_locked(self, src_ip, timestamp, estimated_bytes, entropy):
+    def _update_locked(self, src_ip, timestamp, estimated_bytes, entropy,
+                       qname=None):
         mass = self.query_mass(estimated_bytes, entropy)
         dq = self._sessions.setdefault(src_ip, deque())
         cutoff = timestamp - self.window_seconds
@@ -111,6 +124,29 @@ class SessionTracker:
 
         if self.baseline is not None:
             self.baseline.update(mass, src_ip)
+
+        # M3c domain-level signals (velocity + per-domain beacon timing).
+        velocity_flag = False
+        domain_beacon = False
+        if qname:
+            bd = base_domain(qname)
+            dq2 = self._domain_times.setdefault((src_ip, bd), deque())
+            # keep the full session window: velocity counts the last 60s,
+            # the beacon test spans the whole session
+            cutoff = timestamp - self.window_seconds
+            while dq2 and dq2[0] <= cutoff:
+                dq2.popleft()
+            dq2.append(timestamp)
+            recent = [ts for ts in dq2 if ts > timestamp - config.DOMAIN_VELOCITY_WINDOW]
+            if (len(recent) >= config.DOMAIN_VELOCITY_COUNT
+                    and entropy >= config.DOMAIN_VELOCITY_MIN_ENTROPY):
+                velocity_flag = True
+            if len(dq2) >= config.DOMAIN_BEACON_MIN_QUERIES:
+                dcv = interval_cv(list(dq2))
+                if dcv is not None and dcv < config.DOMAIN_BEACON_MAX_CV:
+                    gaps = [b2 - a2 for a2, b2 in zip(list(dq2), list(dq2)[1:])]
+                    if gaps and statistics.fmean(gaps) >= config.DOMAIN_BEACON_MIN_INTERVAL:
+                        domain_beacon = True
 
         query_count = len(dq)
         cumulative = sum(m for _, m in dq)
@@ -169,10 +205,12 @@ class SessionTracker:
             cumulative_mass=cumulative,
             mean_mass=mean_mass,
             window_seconds=self.window_seconds,
-            slow_drip_candidate=slow_drip,
+            slow_drip_candidate=slow_drip or velocity_flag,
             last_timestamp=timestamp,
-            beacon_candidate=beacon,
+            beacon_candidate=beacon or domain_beacon,
             interval_cv=cv,
+            velocity_candidate=velocity_flag,
+            domain_beacon=domain_beacon,
         )
 
     def get(self, src_ip: str) -> SessionState | None:

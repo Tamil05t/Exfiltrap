@@ -123,7 +123,8 @@ class ExfilTrapPipeline:
 
         estimated_bytes = len(features.leftmost_label) * config.BASE32_BITS_PER_CHAR
         state = self.tracker.update(
-            q.src_ip, q.timestamp, estimated_bytes, features.entropy
+            q.src_ip, q.timestamp, estimated_bytes, features.entropy,
+            qname=q.qname
         )
 
         decode_result = None

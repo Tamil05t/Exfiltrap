@@ -179,3 +179,76 @@ class TestBeaconIntervalGuard:
         for i in range(22):
             state = tracker.update("c2", i * 65.0, 4.0, 2.5)
         assert state.beacon_candidate is True
+
+
+class TestDomainLevelSignals:
+    """M3c: per-(src, base_domain) velocity + beacon timing.
+
+    These are the signals that survive real-host traffic mixing, where the
+    per-source session is polluted by the host's legitimate traffic.
+    """
+
+    def test_domain_velocity_fires(self):
+        # 20 high-entropy labels under ONE base domain within 60s
+        tracker = SessionTracker(baseline=None)
+        state = None
+        for i in range(20):
+            state = tracker.update("h", i * 0.5, 20.0, 4.2,
+                                   qname=f"label{i:03d}x9f2.tunnel.example")
+        assert state.velocity_candidate is True
+        assert state.slow_drip_candidate is True  # velocity feeds the flag
+
+    def test_low_entropy_velocity_not_flagged(self):
+        # a busy REAL domain (www/api labels) must not trip velocity
+        tracker = SessionTracker(baseline=None)
+        state = None
+        for i in range(30):
+            lbl = ["www", "api", "mail"][i % 3]
+            state = tracker.update("h", i * 0.5, 20.0, 1.5,
+                                   qname=f"{lbl}.google.com")
+        assert state.velocity_candidate is False
+
+    def test_domain_beacon_fires_fixed_domain(self):
+        # encrypted hex drip to ONE domain at machine-regular 7s intervals:
+        # the session-level CV is destroyed by mixing, but the per-DOMAIN
+        # timing is clean — this is the live-validated signal.
+        tracker = SessionTracker(baseline=None)
+        import random as _r
+        rng = _r.Random(5)
+        # heavy legit background on the same source (destroys session CV)
+        t = 0.0
+        state = None
+        for i in range(60):
+            t += rng.expovariate(2.0)
+            state = tracker.update("h", t, 30.0, 3.0,
+                                   qname=f"noise{i}.telemetry.example")
+        # the drip: 22 machine-regular queries to one domain
+        for i in range(22):
+            t += 7.0
+            state = tracker.update("h", t, 12.0, 3.6,
+                                   qname=f"chunk{i}.tunnel.example")
+        assert state.domain_beacon is True
+        assert state.beacon_candidate is True
+
+    def test_rotating_domains_defeat_domain_beacon(self):
+        # honest limitation: rotating the tunnel base domain beats per-domain
+        # timing (documented; 10 separate domains get 3 queries each)
+        tracker = SessionTracker(baseline=None)
+        import random as _r
+        rng = _r.Random(9)
+        t = 0.0
+        state = None
+        for i in range(30):
+            t += 7.0
+            # rotate at the registrable level: 10 base domains x 3 queries
+            state = tracker.update("h", t, 12.0, 3.6,
+                                   qname=f"chunk{i}.d{i % 10}.example")
+        assert state.domain_beacon is False
+
+    def test_no_qname_is_none_safe(self):
+        tracker = SessionTracker(baseline=None)
+        state = None
+        for i in range(25):
+            state = tracker.update("h", i * 65.0, 4.0, 2.5)  # no qname
+        assert state.velocity_candidate is False
+        assert state.domain_beacon is False
