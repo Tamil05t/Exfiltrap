@@ -131,6 +131,9 @@ fn main() {
     // known fix is running without it. The app only displays a localhost
     // dashboard, so the webview sandbox adds no security here anyway.
     std::env::set_var("WEBKIT_FORCE_SANDBOX", "0");
+    // webkit 2.46+ renamed it (the old var above prints a deprecation
+    // warning on new webkits and no longer disables anything there):
+    std::env::set_var("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1");
 
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![start_service])
