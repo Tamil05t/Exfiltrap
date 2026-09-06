@@ -127,14 +127,17 @@ jobs:
           # sanity: the portable binary must resolve every lib from the
           # SYSTEM (same story as the deb — proven rendering on Kali)
           ldd portable/ExFilTrap/ex-fil-trap | grep -c "not found" || true
+          tar -czf ExFilTrap-portable-linux.tar.gz -C portable ExFilTrap
       - name: Flatten artifact paths (one folder, no digging)
         run: |
           cp desktop/src-tauri/target/release/bundle/deb/*.deb ./ExFilTrap_1.0.0_amd64.deb
+          cp desktop/src-tauri/target/release/bundle/appimage/*.AppImage ./ExFilTrap_1.0.0_amd64.AppImage
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: exfiltrap-desktop-linux
           path: |
             ExFilTrap_1.0.0_amd64.deb
+            ExFilTrap_1.0.0_amd64.AppImage
             ExFilTrap-portable-linux.tar.gz
           if-no-files-found: error
