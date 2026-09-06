@@ -126,6 +126,11 @@ fn main() {
     // Virtual machines often have no usable GPU/EGL — force software GL so
     // the bundled WebKit never aborts with EGL_BAD_PARAMETER.
     std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
+    // WebKit's bubblewrap sandbox cannot set up its mounts inside an
+    // AppImage (namespace restrictions) and renders an EMPTY window — the
+    // known fix is running without it. The app only displays a localhost
+    // dashboard, so the webview sandbox adds no security here anyway.
+    std::env::set_var("WEBKIT_FORCE_SANDBOX", "0");
 
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![start_service])
