@@ -224,3 +224,17 @@ upgrade to ≥ this version: `--fresh-db` starts with an empty database
 works in every mode (it clears the block row; with an active firewall
 backend it also removes the actual rule). Old test databases can simply be
 deleted: `rm data/exfiltrap.db*`.
+
+---
+
+## 10. Uninstall / full reset
+
+```bash
+sudo pkill -f exfiltrap                 # stop any running engine
+sudo apt remove ex-fil-trap             # uninstall (Linux, .deb)
+# full reset: also delete history, sessions and the engine copy
+sudo rm -rf /var/lib/exfiltrap
+```
+
+Windows: Settings → Apps → ExFilTrap. The desktop Start button also stops
+any previous engine automatically before starting a fresh one.

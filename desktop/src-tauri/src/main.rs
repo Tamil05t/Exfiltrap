@@ -74,8 +74,32 @@ fn service_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
     None
 }
 
+/// Resource directory that contains the bundled engine.
+fn engine_resource_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    for candidate in ["exfiltrap-engine", "resources/exfiltrap-engine"] {
+        if let Ok(p) = app.path().resolve(candidate, BaseDirectory::Resource) {
+            if p.join("exfiltrap").exists() {
+                return Some(p);
+            }
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                let p = parent.join(candidate);
+                if p.join("exfiltrap").exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Start the bundled detection engine as root via pkexec (polkit prompt).
-/// The service keeps running independently of the desktop app.
+/// The engine is COPIED to /var/lib/exfiltrap/engine and launched from
+/// there: deb/AppImage installs carry resource files without the execute
+/// bit, and AppImage mounts are read-only — running from a root-owned copy
+/// fixes both. Any previously running engine is stopped first, so pressing
+/// Start always yields a fresh, working session.
 #[tauri::command]
 async fn start_service(
     app: tauri::AppHandle,
@@ -84,18 +108,29 @@ async fn start_service(
     if cfg!(target_os = "windows") {
         return Err("On Windows, run as Administrator: exfiltrap.exe service --iface <adapter>\n(or install ExFilTrap-Setup.exe — the service starts automatically)".to_string());
     }
-    let bin = service_binary(&app).ok_or_else(|| {
-        "bundled detection engine not found in this package".to_string()
-    })?;
-    let bin = bin.to_string_lossy().to_string();
+    let res_dir = service_binary(&app)
+        .and_then(|bin| bin.parent().map(|p| p.to_path_buf()))
+        .or_else(|| engine_resource_dir(&app))
+        .ok_or_else(|| "bundled detection engine not found in this package".to_string())?;
+    let res_dir = res_dir.to_string_lossy().to_string();
     let iface = iface.trim().replace(['\'', ';', '\\'], "");
-    // Empty iface = let the engine auto-detect the internet interface
-    // (default route) — the smart default.
-    let script = if iface.is_empty() {
-        format!("nohup '{bin}' service >/tmp/exfiltrap-service.log 2>&1 &")
+    let iface_arg = if iface.is_empty() {
+        String::new()
     } else {
-        format!("nohup '{bin}' service --iface '{iface}' >/tmp/exfiltrap-service.log 2>&1 &")
+        format!("--iface '{iface}'")
     };
+    // Root-side script: stop any old engine, copy the engine to a
+    // writable+executable location, then launch it detached. `nohup … >>`
+    // appends so the log keeps the full history of the session.
+    let script = format!(
+        "pkill -f exfiltrap >/dev/null 2>&1 || true; sleep 1; \
+         mkdir -p /var/lib/exfiltrap; \
+         rm -rf /var/lib/exfiltrap/engine; \
+         cp -r '{res_dir}' /var/lib/exfiltrap/engine; \
+         chmod -R +x /var/lib/exfiltrap/engine; \
+         nohup '/var/lib/exfiltrap/engine/exfiltrap' service {iface_arg} \
+         >> /tmp/exfiltrap-service.log 2>&1 &"
+    );
     // pkexec blocks until the polkit dialog is answered — run it on a
     // blocking worker so the webview UI never freezes.
     let out = tauri::async_runtime::spawn_blocking(move || {
