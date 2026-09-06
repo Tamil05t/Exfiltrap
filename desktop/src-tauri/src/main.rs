@@ -146,7 +146,22 @@ async fn start_service(
     if out.status.success() {
         Ok("service start requested".into())
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let code = out.status.code().unwrap_or(-1);
+        Err(format!(
+            "pkexec exit code {} — {}{}",
+            code,
+            if stderr.is_empty() {
+                "the authorization prompt was dismissed, or no polkit agent is running in this session (Kali: sudo apt install polkit-kde-agent)".to_string()
+            } else {
+                stderr
+            },
+            if code == 126 || code == 127 {
+                "\nIf no prompt appeared at all, install a polkit authentication agent and log out/in.".to_string()
+            } else {
+                String::new()
+            }
+        ))
     }
 }
 
