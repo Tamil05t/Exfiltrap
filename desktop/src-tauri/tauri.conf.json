@@ -35,11 +35,11 @@
       "resources/exfiltrap-engine"
     ],
     "targets": [
-      "deb",
-      "appimage"
+      "deb"
     ],
     "icon": [
       "icons/icon.png"
     ]
-  }
+  },
+  "mainBinaryName": "ex-fil-trap"
 }

@@ -99,11 +99,10 @@ jobs:
           python tools/make_icon.py desktop/src-tauri/icons/icon-source.png
           cd desktop && npm install
           npx tauri icon src-tauri/icons/icon-source.png
-      - name: Build the .deb + AppImage (default bundled libraries — the
-          configuration proven to render on Kali and Mint)
+      - name: Build the .deb (system webkit stack)
         run: |
           cd desktop
-          npm run tauri build -- --bundles deb,appimage
+          npm run tauri build -- --bundles deb
       - name: Assemble the portable package from the INSTALLED .deb files
         run: |
           sudo apt install -y ./desktop/src-tauri/target/release/bundle/deb/*.deb
@@ -127,14 +126,12 @@ jobs:
           tar -czf ExFilTrap-portable-linux.tar.gz -C portable ExFilTrap
       - name: Flatten artifact paths (one folder, no digging)
         run: |
-          cp desktop/src-tauri/target/release/bundle/deb/*.deb ./ExFilTrap_1.0.0_amd64.deb
-          cp desktop/src-tauri/target/release/bundle/appimage/*.AppImage ./ExFilTrap_1.0.0_amd64.AppImage
+          cp desktop/src-tauri/target/release/bundle/deb/*.deb ./ExFilTrap_1.1.0_amd64.deb
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: exfiltrap-desktop-linux
           path: |
-            ExFilTrap_1.0.0_amd64.deb
-            ExFilTrap_1.0.0_amd64.AppImage
+            ExFilTrap_1.1.0_amd64.deb
             ExFilTrap-portable-linux.tar.gz
           if-no-files-found: error
