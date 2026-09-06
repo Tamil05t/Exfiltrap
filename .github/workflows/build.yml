@@ -126,7 +126,7 @@ jobs:
           tar -czf ExFilTrap-portable-linux.tar.gz -C portable ExFilTrap
       - name: Flatten artifact paths (one folder, no digging)
         run: |
-          cp desktop/src-tauri/target/release/bundle/deb/*.deb ./ExFilTrap_1.1.0_amd64.deb
+          cp desktop/src-tauri/target/release/bundle/deb/*.deb ./
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
