@@ -29,11 +29,18 @@ BASE32_BITS_PER_CHAR = 0.625
 MAX_LABEL_ENTROPY = 5.0
 # ASSUMPTION: a session needs at least this many in-window queries before the
 # slow-drip test is meaningful (guards against flagging on 1-2 odd queries).
-SLOW_DRIP_MIN_QUERIES = 10
+SLOW_DRIP_MIN_QUERIES = 30
 # M3b beacon regularity: covert C2 channels query on a fixed timer, so the
 # coefficient of variation (std/mean) of inter-arrival times approaches 0,
 # while ordinary resolver traffic is Poisson-like with CV ~= 1.
-BEACON_MIN_QUERIES = 10
+BEACON_MIN_QUERIES = 20
+# M3 practical-significance guard: the sequential z-test fires on ANY
+# persistent elevation given enough samples (a session whose mean mass is
+# 25% above median crosses z>3 after ~70 queries — observed live on real
+# desktop traffic). A tunnel means MULTI-RAyte extra payload per query, so
+# require the session mean to also exceed the population median by this
+# ratio before calling it a slow-drip.
+SESSION_ELEVATION_RATIO = 1.8
 # ASSUMPTION: intervals below this CV count as machine-periodic. 0.25 sits
 # far below Poisson noise and above realistic timer jitter.
 BEACON_MAX_CV = 0.25

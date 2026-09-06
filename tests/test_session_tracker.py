@@ -29,7 +29,7 @@ class TestBeaconDetection:
         # signal fires even with NO baseline at all (content-agnostic).
         tracker = SessionTracker(baseline=None)
         state = None
-        for i in range(15):
+        for i in range(22):
             state = tracker.update("beacon-host", i * 65.0, 4.0, 2.5)
         assert state.beacon_candidate is True
         assert state.slow_drip_candidate is False  # mass signal stays clean
@@ -176,6 +176,6 @@ class TestBeaconIntervalGuard:
     def test_slow_periodic_still_flagged(self):
         tracker = SessionTracker(baseline=None)
         state = None
-        for i in range(12):
+        for i in range(22):
             state = tracker.update("c2", i * 65.0, 4.0, 2.5)
         assert state.beacon_candidate is True

@@ -48,8 +48,11 @@ def benign_queries(n=200, start=0.0, src="10.99.0.2"):
     import random
 
     rng = random.Random(99)
-    names = ["www.google.com", "api.cloudflare.com", "cdn.jsdelivr.net",
-             "mail.proton.me", "static.example.org"]
+    names = ["www.google.com", "accounts.portal.example", "api.cloudflare.com",
+             "img.cdn.example.net", "cdn.jsdelivr.net", "mail.proton.me",
+             "a1b2c3.metrics.example.io", "static.example.org",
+             "search.query.example.org", "docs.wiki.example",
+             "fonts.static.example.net", "video.stream.example.org"]
     out = []
     t = start
     for i in range(n):

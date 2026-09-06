@@ -110,7 +110,7 @@ class SessionTracker:
         dq.append((timestamp, mass))
 
         if self.baseline is not None:
-            self.baseline.update(mass)
+            self.baseline.update(mass, src_ip)
 
         query_count = len(dq)
         cumulative = sum(m for _, m in dq)
@@ -119,13 +119,38 @@ class SessionTracker:
         slow_drip = False
         if self.baseline is not None and self.baseline.ready:
             if query_count >= self.min_queries:
-                pop_std = self.baseline.population_std
-                sem = pop_std / (query_count ** 0.5)
-                if sem < 1e-9:
-                    slow_drip = mean_mass > self.baseline.population_mean
+                # Robust sequential test: compare the session MEAN against
+                # the population MEAN (same statistic, both sides), with the
+                # SPREAD estimated robustly by MAD — real desktop traffic is
+                # bimodal/heavy-tailed (tiny www labels vs heavy bare-domain
+                # labels), where plain std is inflated by bursts and a
+                # mean-vs-median comparison is apples-vs-oranges (both
+                # failure modes observed live on real machines).
+                # Leave-one-source-out reference: immune to the attacker
+                # polluting the baseline with its own traffic AND correct
+                # for skewed/multimodal benign traffic (mean-vs-mean).
+                excl = self.baseline.population_stats_excluding(src_ip)
+                if excl is not None:
+                    pop_mean, pop_mad, _ = excl
                 else:
-                    z = (mean_mass - self.baseline.population_mean) / sem
-                    slow_drip = z > self.baseline.k
+                    pop_mean = self.baseline.mean
+                    pop_mad = self.baseline.population_mad
+                # Floor the standard error: in a near-constant population
+                # (MAD ~ 0) even a trivial 1-byte elevation becomes "z=200",
+                # which is noise-chasing, not detection. The floor permits
+                # meaningful elevations (~15% of the mean) to accumulate.
+                sem = max(1.4826 * pop_mad,
+                          0.15 * abs(pop_mean)) / (query_count ** 0.5)
+                if sem < 1e-9:
+                    z_ok = mean_mass > pop_mean
+                else:
+                    z_ok = (mean_mass - pop_mean) / sem > self.baseline.k
+                # Practical significance: statistical significance alone
+                # fires on any persistent micro-elevation (seen live on
+                # real desktop traffic). A tunnel carries MULTI-BYTE extra
+                # payload per query — require both.
+                slow_drip = z_ok and (
+                    pop_mean <= 1e-9 or mean_mass > config.SESSION_ELEVATION_RATIO * pop_mean)
 
         cv = interval_cv([t for t, _ in dq])
         intervals = [b - a for a, b in zip([t for t, _ in dq],

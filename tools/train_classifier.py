@@ -89,6 +89,47 @@ def build_benign_rows(n: int, seed: int, benign_csv) -> list[dict]:
     return rows
 
 
+
+def text_tunnel_rows(seed: int, n: int) -> list[dict]:
+    """Tunnel rows built from REALISTIC ASCII DOCUMENT payloads.
+
+    Live red-teaming (Mint, Sept 2026) showed the original corpus — random
+    bytes only — never covered base32/hex of plain text, whose label
+    entropy sits at 2.8-4.3: the exact gap a real exfil operator exploits
+    by tunneling documents instead of random blobs. This generator fills
+    that region so the forest learns it as malicious too.
+    """
+    import base64 as b64mod
+    import binascii as bniamod
+    import random as rnd
+
+    rng = rnd.Random(seed)
+    words = ("quarterly", "results", "ledger", "invoice", "passport", "salary",
+             "contract", "customer", "database", "backup", "password", "audit")
+    fx = FeatureExtractor()
+    rows: list[dict] = []
+    for i in range(n):
+        doc = " ".join(rng.choice(words)
+                       for _ in range(rng.randint(3, 12))).encode()
+        use_hex = rng.random() < 0.3
+        if use_hex:
+            enc = bniamod.hexlify(doc).decode()
+        else:
+            enc = b64mod.b32encode(doc).decode().rstrip("=")
+        chunk_len = rng.randint(20, 58)
+        chunks = [enc[j:j + chunk_len] for j in range(0, len(enc), chunk_len)]
+        chunks = chunks[:3]
+        n_labels = len(chunks)
+        name = ".".join(chunks) + "." + config.TUNNEL_DOMAIN
+        ts = float(i)
+        v = fx.extract(name, ts)
+        rows.append({"entropy": v.entropy, "length": v.length,
+                     "subdomain_count": v.subdomain_count,
+                     "frequency": 1.0 + (i % 30), "label": 1})
+        _ = n_labels, use_hex
+    return rows
+
+
 def build_malicious_rows(seed: int) -> list[dict]:
     rows: list[dict] = []
     # FAST: a couple of runs is plenty of rows (0.05s interval adds up fast).
@@ -110,6 +151,7 @@ def build_malicious_rows(seed: int) -> list[dict]:
             duration=3600.0, seed=seed + 200 + run,
         )
         rows += _extract(records, step=1)
+    rows += text_tunnel_rows(seed + 700, 4000)
     return rows
 
 

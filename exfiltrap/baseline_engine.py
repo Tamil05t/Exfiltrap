@@ -7,6 +7,9 @@ anomaly threshold ``mean + k * std``. Everything here is deterministic.
 
 from __future__ import annotations
 
+import statistics
+from collections import deque
+
 from exfiltrap import config
 
 
@@ -34,8 +37,12 @@ class BaselineEngine:
         self._n = 0
         self._welford_mean = 0.0
         self._welford_m2 = 0.0
+        # Robust population view: real network traffic is heavy-tailed, so
+        # mean/std are dominated by bursts. A rolling window + median/MAD
+        # gives an outlier-resistant baseline for the session z-test.
+        self._window: deque[tuple[float, str | None]] = deque(maxlen=4000)
 
-    def update(self, observed: float) -> float:
+    def update(self, observed: float, src: str | None = None) -> float:
         """Fold one observation in; returns the updated EWMA mean."""
         if self._ewma is None:
             self._ewma = float(observed)
@@ -46,6 +53,7 @@ class BaselineEngine:
         delta = observed - self._welford_mean
         self._welford_mean += delta / self._n
         self._welford_m2 += delta * (observed - self._welford_mean)
+        self._window.append((observed, src))
         return self._ewma
 
     @property
@@ -83,6 +91,38 @@ class BaselineEngine:
     @property
     def ready(self) -> bool:
         return self._n >= self.warmup
+
+    def population_stats_excluding(self, src: str | None):
+        """(mean, mad, n) of the window EXCLUDING one source.
+
+        The leave-one-source-out reference: a tunnel session must be
+        compared against traffic that does not CONTAIN the tunnel —
+        otherwise the attacker's own heavy queries drag the baseline
+        toward them (observed live: baseline mean poisoned to 21.6).
+        Returns None when too few independent samples remain.
+        """
+        vals = [m for (m, s) in self._window if s != src]
+        if len(vals) < 30:
+            return None
+        med = statistics.median(vals)
+        mad = statistics.median(abs(v - med) for v in vals)
+        return statistics.fmean(vals), mad, len(vals)
+
+    @property
+    def population_median(self) -> float:
+        """Median of the recent observation window (robust center)."""
+        if not self._window:
+            return 0.0
+        return statistics.median(m for m, _ in self._window)
+
+    @property
+    def population_mad(self) -> float:
+        """Median absolute deviation of the window (robust spread)."""
+        if not self._window:
+            return 0.0
+        masses = [m for m, _ in self._window]
+        med = statistics.median(masses)
+        return statistics.median(abs(v - med) for v in masses)
 
     def dynamic_threshold(self) -> float | None:
         """mean + k*std once warmed up, else None (not yet trustworthy)."""
