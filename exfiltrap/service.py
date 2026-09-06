@@ -271,7 +271,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.alert is None:
         args.alert = os.environ.get("EXFILTRAP_ALERT", "none")
     if not args.db:
-        args.db = config.DB_PATH
+        if getattr(sys, "frozen", False):
+            # Frozen engine launched from its package (AppImage mount, deb
+            # resource dir): the executable's own directory can be READ-ONLY
+            # (AppImage squashfs), so the database defaults to a system
+            # data path instead of crashing SQLite at startup.
+            for data_dir in ("/var/lib/exfiltrap",
+                             os.path.expanduser("~/.local/share/exfiltrap"),
+                             "/tmp"):
+                try:
+                    os.makedirs(data_dir, exist_ok=True)
+                    args.db = os.path.join(data_dir, "exfiltrap.db")
+                    break
+                except OSError:
+                    continue
+        if not args.db:
+            args.db = config.DB_PATH
     if args.fresh_db:
         import glob as _glob
 

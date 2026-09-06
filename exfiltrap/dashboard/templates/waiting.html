@@ -41,6 +41,8 @@
       <button onclick="startSvc()" style="margin:0">Start service</button>
     </div>
     <p id="status" style="min-height:1.4em"></p>
+    <pre id="logbox" style="display:none; text-align:left; max-height:14rem;
+         overflow:auto; font-size:.72rem"></pre>
     <p style="font-size:.8rem">Headless instead? The engine also runs from a
        terminal: <code>sudo ./exfiltrap service --iface eth0</code> (Linux
        service build) or <code>sudo systemctl start exfiltrap@eth0</code>
@@ -66,6 +68,22 @@
       }
       return null;
     }
+    async function watchEngine(api) {
+      // If the engine dies after start, surface its log right here.
+      let waited = 0;
+      const timer = setInterval(async () => {
+        waited += 3;
+        if (await up()) { clearInterval(timer); go(); return; }
+        if (waited >= 12 && api) {
+          try {
+            const log = await api.invoke('service_log');
+            const box = document.getElementById('logbox');
+            if (log && log.trim()) { box.textContent = log; box.style.display = 'block'; }
+          } catch (e) { /* bridge not ready */ }
+        }
+        if (waited > 120) clearInterval(timer);
+      }, 3000);
+    }
     async function startSvc() {
       const st = document.getElementById('status');
       const iface = document.getElementById('iface').value.trim();
@@ -75,6 +93,7 @@
         if (api) {
           await api.invoke('start_service', { iface });
           st.textContent = 'Service starting — waiting for the dashboard…';
+          watchEngine(api);
         } else {
           st.textContent = 'Not running inside the desktop app — start the ' +
             'service from a terminal (commands below).';
