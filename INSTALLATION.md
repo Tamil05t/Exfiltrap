@@ -58,7 +58,20 @@ and `%PROGRAMDATA%\ExFilTrap`).
 
 ---
 
-## 3. Linux — pick one of three
+## 3. Linux — pick one
+
+**Which package for which distro (read this first):**
+
+| your distro | use | why |
+|---|---|---|
+| **Kali, Debian 13+, Ubuntu 24.04+** | **`.deb`** (`sudo apt install ./ExFilTrap_*.deb`) | native format, no FUSE, desktop entry + engine included |
+| any distro, **no install wanted** | **`ExFilTrap-portable-linux.tar.gz`** | extract and run — no FUSE, no root to launch |
+| older distros with `libfuse2` present | `.AppImage` | classic AppImage route |
+
+> The AppImage needs `libfuse2`, which Kali and Debian 13 removed from
+> their repositories — on those systems use the `.deb` or the portable
+> tarball instead; do not try to install libfuse2.
+
 
 ### 3a. `.deb` package (Debian/Ubuntu)
 ```bash
