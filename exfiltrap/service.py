@@ -207,6 +207,40 @@ def run_capture_feed(pipeline: ExfilTrapPipeline, runtime: ServiceRuntime,
     thread.join(timeout=3.0)
 
 
+def resolve_interfaces(cli_iface: str | None) -> list[str] | None:
+    """Resolve the capture target list from the --iface argument.
+
+    Default: the internet (default-route) interface PLUS loopback — modern
+    desktops answer applications from a local resolver stub on `lo`
+    (systemd-resolved at 127.0.0.53), so watching only the uplink misses
+    most queries. 'any' captures every interface; an explicit name wins.
+    Returns None when auto-detection fails (caller exits cleanly).
+    """
+    from exfiltrap import netif
+
+    if not cli_iface:
+        detected = netif.default_interface()
+        ifaces = [i for i in (detected, "lo") if i]
+        if not ifaces:
+            print(
+                "could not auto-detect the internet interface.\n"
+                "Available interfaces:\n  "
+                + "\n  ".join(netif.list_interfaces())
+                + "\nPass one explicitly with --iface."
+            )
+            return None
+        return ifaces
+    if cli_iface.lower() in ("any", "all"):
+        return ["any"]
+    if cli_iface.lower() in ("auto", "default"):
+        detected = netif.default_interface()
+        if not detected:
+            print("could not auto-detect the internet interface.")
+            return None
+        return [detected]
+    return [cli_iface]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python3 -m exfiltrap.service",
@@ -241,29 +275,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
 
-    # Smart capture selection: DNS can flow over ANY interface — the wifi
-    #/ethernet uplink, AND the local resolver stub on loopback (systemd-
-    # resolved answers apps from 127.0.0.53 over `lo` on most modern
-    # distros). Watching a single interface silently misses the stub, so
-    # the default is capturing everywhere ("any"); explicit --iface narrows it.
-    if not args.iface or args.iface.lower() in ("any", "all"):
-        args.iface = "any"
-        print("capturing DNS on ALL interfaces (any) — includes the local "
-              "resolver stub on loopback")
-    elif args.iface.lower() in ("auto", "default"):
-        from exfiltrap import netif
-
-        detected = netif.default_interface()
-        if not detected:
-            print(
-                "could not auto-detect the internet interface.\n"
-                "Available interfaces:\n  "
-                + "\n  ".join(netif.list_interfaces())
-                + "\nPass one explicitly with --iface."
-            )
-            return 2
-        args.iface = detected
-        print(f"auto-detected internet interface: {args.iface}")
+    resolved = resolve_interfaces(args.iface)
+    if resolved is None:
+        return 2
+    args.iface = resolved
+    print("capturing DNS on: " + ", ".join(resolved))
 
     # Environment fallbacks used by the systemd unit (packaging/linux):
     # the unit passes configuration via Environment= so operators can
@@ -360,7 +376,9 @@ def main(argv: list[str] | None = None) -> int:
     state_path = (args.db or "exfiltrap.db") + ".state.json"
     if args.iface and st_mod.load_state(pipeline.tracker, state_path):
         log.info("restored session/baseline state from %s", state_path)
-    runtime = ServiceRuntime(mode=f"live:{args.iface}")
+    iface_label = (args.iface if isinstance(args.iface, str)
+                   else "+".join(args.iface))
+    runtime = ServiceRuntime(mode=f"live:{iface_label}")
     stop_event = threading.Event()
 
     def _request_stop(signum, _frame) -> None:

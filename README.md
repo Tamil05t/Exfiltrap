@@ -86,7 +86,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 make test            # 198 tests, no root needed
 make train           # trains data/model/rf_model.joblib (reproducible, seeded)
 make eval            # reproduces the results table
-sudo make service               # live service — captures DNS on ALL interfaces
+sudo make service               # live service (internet iface + loopback stub)
 ```
 
 Single-entry CLI (what the packaged executables expose):

@@ -99,10 +99,14 @@ jobs:
           python tools/make_icon.py desktop/src-tauri/icons/icon-source.png
           cd desktop && npm install
           npx tauri icon src-tauri/icons/icon-source.png
-      - name: Build the .deb (uses the SYSTEM gtk/webkit stack — no bundled copies)
+      - name: Build the .deb + AppImage
+        env:
+          # AppImage: use the SYSTEM gtk/webkit stack (same libs as the .deb,
+          # proven rendering) instead of bundling a clashing second copy.
+          EXCLUDE_LIBRARIES: "libwebkit2gtk-4.1.so.100 libjavascriptcoregtk-4.1.so.0 libsoup-3.0.so.0 libgtk-3.so.0 libgdk-3.so.0 libglib-2.0.so.0 libgobject-2.0.so.0 libgio-2.0.so.0 libgmodule-2.0.so.0 libgdk_pixbuf-2.0.so.0 libpango-1.0.so.0 libpangocairo-1.0.so.0 libpangoft2-1.0.so.0 libharfbuzz.so.0 libatk-1.0.so.0 libatk-bridge-2.0.so.0 libcairo.so.2 libcairo-gobject.so.2 libepoxy.so.0"
         run: |
           cd desktop
-          npm run tauri build -- --bundles deb
+          npm run tauri build -- --bundles deb,appimage
       - name: Assemble the portable package from the INSTALLED .deb files
         run: |
           sudo apt install -y ./desktop/src-tauri/target/release/bundle/deb/*.deb

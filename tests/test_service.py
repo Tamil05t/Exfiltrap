@@ -61,7 +61,7 @@ class TestServiceApi:
         monkeypatch.setattr(service.privileges,
                             "has_capture_capability", lambda: True)
         assert service.main(["--iface", "auto"]) == 2
-        assert "Available interfaces" in capsys.readouterr().out
+        assert "could not auto-detect" in capsys.readouterr().out
 
 
 class TestRuntimeStatus:

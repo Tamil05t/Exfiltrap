@@ -20,3 +20,29 @@ class TestNetif:
         # flap between calls on a healthy machine).
         a, b = default_interface(), default_interface()
         assert a == b
+
+
+class TestResolveInterfaces:
+    def test_default_includes_loopback_stub(self, monkeypatch):
+        from exfiltrap import netif, service
+
+        monkeypatch.setattr(netif, "default_interface", lambda: "wlo1")
+        assert service.resolve_interfaces(None) == ["wlo1", "lo"]
+
+    def test_explicit_name_wins(self, monkeypatch):
+        from exfiltrap import netif, service
+
+        monkeypatch.setattr(netif, "default_interface", lambda: "wlo1")
+        assert service.resolve_interfaces("eth0") == ["eth0"]
+
+    def test_any_single_device(self, monkeypatch):
+        from exfiltrap import netif, service
+
+        monkeypatch.setattr(netif, "default_interface", lambda: "wlo1")
+        assert service.resolve_interfaces("any") == ["any"]
+
+    def test_auto_detect_failure_returns_none(self, monkeypatch):
+        from exfiltrap import netif, service
+
+        monkeypatch.setattr(netif, "default_interface", lambda: None)
+        assert service.resolve_interfaces("auto") is None

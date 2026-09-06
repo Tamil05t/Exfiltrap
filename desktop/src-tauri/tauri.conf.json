@@ -35,7 +35,8 @@
       "resources/exfiltrap-engine"
     ],
     "targets": [
-      "deb"
+      "deb",
+      "appimage"
     ],
     "icon": [
       "icons/icon.png"

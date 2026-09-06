@@ -93,7 +93,8 @@ def _classify(pkt):
     return packet_to_query(pkt) or packet_to_response(pkt)
 
 
-def make_sniffer(iface: str, out_queue: queue.Queue) -> AsyncSniffer:
+def make_sniffer(iface: str | list[str],
+                 out_queue: queue.Queue) -> AsyncSniffer:
     """Build (do not start) an async sniffer feeding the queue."""
     return AsyncSniffer(
         iface=iface,
