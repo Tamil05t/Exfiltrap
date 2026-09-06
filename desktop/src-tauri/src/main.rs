@@ -158,9 +158,6 @@ fn main() {
     // only affect this process and cost nothing on healthy systems.
     std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-    // Virtual machines often have no usable GPU/EGL — force software GL so
-    // the bundled WebKit never aborts with EGL_BAD_PARAMETER.
-    std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
     // WebKit's bubblewrap sandbox cannot set up its mounts inside an
     // AppImage (namespace restrictions) and renders an EMPTY window — the
     // known fix is running without it. The app only displays a localhost
