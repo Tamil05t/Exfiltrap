@@ -113,7 +113,13 @@ async fn start_service(
         .or_else(|| engine_resource_dir(&app))
         .ok_or_else(|| "bundled detection engine not found in this package".to_string())?;
     let res_dir = res_dir.to_string_lossy().to_string();
-    let iface = iface.trim().replace(['\'', ';', '\\'], "");
+    // Whitelist interface characters — this string is embedded into a
+    // root-side shell script, so anything outside [A-Za-z0-9._-] is hostile.
+    let iface: String = iface
+        .trim()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        .collect();
     let iface_arg = if iface.is_empty() {
         String::new()
     } else {
@@ -122,8 +128,17 @@ async fn start_service(
     // Root-side script: stop any old engine, copy the engine to a
     // writable+executable location, then launch it detached. `nohup … >>`
     // appends so the log keeps the full history of the session.
+    //
+    // `pkill -x` (exact process-name match) is load-bearing: `pkill -f`
+    // matches full command lines, and this script's own command line
+    // contains "exfiltrap" (engine paths), so `-f` SIGTERM'd pkexec AND
+    // this sh the instant it ran — auth succeeded, engine never launched,
+    // and the app surfaced the signal death as "pkexec exit code -1".
+    // Neither pkexec, sh, nor this app binary (ex-fil-trap) is named
+    // "exfiltrap", so `-x` hits only the engine itself.
     let script = format!(
-        "pkill -f exfiltrap >/dev/null 2>&1 || true; sleep 1; \
+        "systemctl stop 'exfiltrap@*' >/dev/null 2>&1; \
+         pkill -x exfiltrap >/dev/null 2>&1; sleep 1; \
          mkdir -p /var/lib/exfiltrap; \
          rm -rf /var/lib/exfiltrap/engine; \
          cp -r '{res_dir}' /var/lib/exfiltrap/engine; \
@@ -148,51 +163,43 @@ async fn start_service(
     } else {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         let code = out.status.code().unwrap_or(-1);
-        Err(format!(
-            "pkexec exit code {} — {}{}",
-            code,
-            if stderr.is_empty() {
-                "the authorization prompt was dismissed, or no polkit agent is running in this session (Kali: sudo apt install polkit-kde-agent)".to_string()
-            } else {
-                stderr
-            },
-            if code == 126 || code == 127 {
-                "\nIf no prompt appeared at all, install a polkit authentication agent and log out/in.".to_string()
-            } else {
-                String::new()
+        let detail = if stderr.is_empty() {
+            match code {
+                // No exit code = killed by a signal: the root script died
+                // before finishing (pre-1.3.1 this was its own `pkill -f`
+                // self-match; any recurrence means something killed pkexec).
+                -1 => "start script was killed by a signal — engine did not launch".to_string(),
+                _ => format!("exit status {code}"),
             }
-        ))
+        } else {
+            stderr
+        };
+        Err(format!("pkexec failed: {detail}"))
     }
 }
 
-/// Ensure a polkit authentication agent is running in this session.
-/// Without one, pkexec fails with exit -1 and NO password prompt ever
-/// appears (the daemon exists, but nothing renders the dialog) — the
-/// exact "Start failed: pkexec exit code -1" users saw on Mint/Kali.
-fn ensure_polkit_agent() -> Result<(), String> {
-    if Command::new("pgrep")
-        .arg("-f")
-        .arg("polkit.*authentication-agent|lxpolkit|polkit-kde-agent")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
-        return Ok(());
-    }
-    for agent in [
-        "/usr/lib/x86_64-linux-gnu/polkit-1/polkit-1-agent-1", // Mint/Ubuntu
-        "/usr/libexec/polkit-1/polkit-1-agent-1",             // generic
-        "/usr/lib/polkit-1/polkit-1-agent-1",                 // Debian
-        "/usr/lib/x86_64-linux-gnu/lxpolkit",                 // LXDE
-        "/usr/lib/x86_64-linux-gnu/libexec/polkit-kde-authentication-agent-1",
-    ] {
-        if PathBuf::from(agent).exists() {
-            let _ = Command::new(agent).spawn();
-            thread::sleep(Duration::from_millis(500));
-            return Ok(());
+/// Tail of the engine log, for surfacing startup failures in the waiting
+/// screen (waiting.html polls this after a failed/timeout start).
+#[tauri::command]
+fn service_log() -> String {
+    match std::fs::read_to_string("/tmp/exfiltrap-service.log") {
+        Ok(log) => {
+            // Tail only — the log grows unbounded across sessions and the
+            // whole file would stall the webview.
+            let len = log.len();
+            if len > 8000 {
+                // Walk forward to a UTF-8 char boundary (no nightly APIs).
+                let mut start = len - 8000;
+                while start < len && !log.is_char_boundary(start) {
+                    start += 1;
+                }
+                log[start..].to_string()
+            } else {
+                log
+            }
         }
+        Err(_) => String::new(),
     }
-    Err("no polkit authentication agent found. Install one:\n  sudo apt install policykit-1-gnome   (or lxpolkit)\nthen log out and back in — or use the terminal start command below.".to_string())
 }
 
 fn main() {
@@ -213,7 +220,7 @@ fn main() {
     std::env::set_var("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1");
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![start_service])
+        .invoke_handler(tauri::generate_handler![start_service, service_log])
         .setup(|app| {
             // Window + tray icon: set explicitly at runtime, otherwise the
             // taskbar shows a blank placeholder when the app is not an

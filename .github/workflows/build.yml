@@ -103,6 +103,13 @@ jobs:
         run: |
           cd desktop
           npm run tauri build -- --bundles deb
+      - name: Bundle the AppImage (portable, double-clickable)
+        # Non-blocking: if AppImage tooling flakes, the deb + portable
+        # artifacts above must still ship.
+        continue-on-error: true
+        run: |
+          cd desktop
+          npm run tauri build -- --bundles appimage
       - name: Assemble the portable package from the INSTALLED .deb files
         run: |
           sudo apt install -y ./desktop/src-tauri/target/release/bundle/deb/*.deb
@@ -127,11 +134,13 @@ jobs:
       - name: Flatten artifact paths (one folder, no digging)
         run: |
           cp desktop/src-tauri/target/release/bundle/deb/*.deb ./
+          cp desktop/src-tauri/target/release/bundle/appimage/*.AppImage ./ 2>/dev/null || true
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: exfiltrap-desktop-linux
           path: |
             desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
             ExFilTrap-portable-linux.tar.gz
           if-no-files-found: error
