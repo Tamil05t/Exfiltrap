@@ -140,7 +140,7 @@ jobs:
         with:
           name: exfiltrap-desktop-linux
           path: |
-            desktop/src-tauri/target/release/bundle/deb/*.deb
-            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            ExFilTrap_*.deb
+            ExFilTrap_*.AppImage
             ExFilTrap-portable-linux.tar.gz
           if-no-files-found: error
