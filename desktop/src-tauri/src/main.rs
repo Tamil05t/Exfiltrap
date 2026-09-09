@@ -165,6 +165,36 @@ async fn start_service(
     }
 }
 
+/// Ensure a polkit authentication agent is running in this session.
+/// Without one, pkexec fails with exit -1 and NO password prompt ever
+/// appears (the daemon exists, but nothing renders the dialog) — the
+/// exact "Start failed: pkexec exit code -1" users saw on Mint/Kali.
+fn ensure_polkit_agent() -> Result<(), String> {
+    if Command::new("pgrep")
+        .arg("-f")
+        .arg("polkit.*authentication-agent|lxpolkit|polkit-kde-agent")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    for agent in [
+        "/usr/lib/x86_64-linux-gnu/polkit-1/polkit-1-agent-1", // Mint/Ubuntu
+        "/usr/libexec/polkit-1/polkit-1-agent-1",             // generic
+        "/usr/lib/polkit-1/polkit-1-agent-1",                 // Debian
+        "/usr/lib/x86_64-linux-gnu/lxpolkit",                 // LXDE
+        "/usr/lib/x86_64-linux-gnu/libexec/polkit-kde-authentication-agent-1",
+    ] {
+        if PathBuf::from(agent).exists() {
+            let _ = Command::new(agent).spawn();
+            thread::sleep(Duration::from_millis(500));
+            return Ok(());
+        }
+    }
+    Err("no polkit authentication agent found. Install one:\n  sudo apt install policykit-1-gnome   (or lxpolkit)\nthen log out and back in — or use the terminal start command below.".to_string())
+}
+
 fn main() {
     // WebKitGTK on Linux: the DMABUF renderer and the accelerated
     // compositor are responsible for blank white windows and frozen,
