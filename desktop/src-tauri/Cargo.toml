@@ -1,6 +1,6 @@
 [package]
 name = "exfiltrap-desktop"
-version = "1.3.1"
+version = "1.3.2"
 description = "ExFilTrap DNS exfiltration monitor — desktop shell"
 authors = ["ExFilTrap Project"]
 edition = "2021"

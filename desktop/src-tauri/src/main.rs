@@ -8,7 +8,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -94,6 +94,23 @@ fn engine_resource_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
     None
 }
 
+/// Recursive directory copy (std only) — used to stage the engine off an
+/// AppImage FUSE mount into a location root can read.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let to = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
+}
+
 /// Start the bundled detection engine as root via pkexec (polkit prompt).
 /// The engine is COPIED to /var/lib/exfiltrap/engine and launched from
 /// there: deb/AppImage installs carry resource files without the execute
@@ -112,7 +129,19 @@ async fn start_service(
         .and_then(|bin| bin.parent().map(|p| p.to_path_buf()))
         .or_else(|| engine_resource_dir(&app))
         .ok_or_else(|| "bundled detection engine not found in this package".to_string())?;
-    let res_dir = res_dir.to_string_lossy().to_string();
+    let mut res_dir = res_dir.to_string_lossy().to_string();
+    // AppImage gotcha, found live: FUSE mounts serve ONLY the user who
+    // launched them — root gets EPERM ("Permission denied" on cp), so a
+    // root-side copy straight from /tmp/.mount_* fails silently. When the
+    // engine lives on an AppImage mount, stage a user-readable mirror in
+    // /tmp first; root copies from there.
+    if res_dir.contains("/.mount_") || res_dir.starts_with("/tmp/.mount_") {
+        let stage = std::env::temp_dir().join("exfiltrap-engine-stage");
+        let _ = std::fs::remove_dir_all(&stage);
+        copy_dir_recursive(Path::new(&res_dir), &stage)
+            .map_err(|e| format!("staging AppImage engine failed: {e}"))?;
+        res_dir = stage.to_string_lossy().to_string();
+    }
     // Whitelist interface characters — this string is embedded into a
     // root-side shell script, so anything outside [A-Za-z0-9._-] is hostile.
     let iface: String = iface
@@ -136,15 +165,25 @@ async fn start_service(
     // and the app surfaced the signal death as "pkexec exit code -1".
     // Neither pkexec, sh, nor this app binary (ex-fil-trap) is named
     // "exfiltrap", so `-x` hits only the engine itself.
+    //
+    // `set -e` on the copy chain: a failed cp previously fell through to
+    // "success" (the AppImage/root-EPERM case) and the UI waited on an
+    // engine that never came. Errors now surface through pkexec's stderr.
     let script = format!(
-        "systemctl stop 'exfiltrap@*' >/dev/null 2>&1; \
-         pkill -x exfiltrap >/dev/null 2>&1; sleep 1; \
+        "set -e; \
+         systemctl stop 'exfiltrap@*' >/dev/null 2>&1 || true; \
+         pkill -x exfiltrap >/dev/null 2>&1 || true; sleep 1; \
          mkdir -p /var/lib/exfiltrap; \
          rm -rf /var/lib/exfiltrap/engine; \
          cp -r '{res_dir}' /var/lib/exfiltrap/engine; \
          chmod -R +x /var/lib/exfiltrap/engine; \
          nohup '/var/lib/exfiltrap/engine/exfiltrap' service {iface_arg} \
-         >> /tmp/exfiltrap-service.log 2>&1 &"
+         >> /tmp/exfiltrap-service.log 2>&1 & \
+         i=0; while [ $i -lt 20 ]; do \
+           pgrep -x exfiltrap >/dev/null 2>&1 && exit 0; \
+           i=$((i+1)); sleep 0.5; \
+         done; \
+         echo 'engine process did not come up after launch — see /tmp/exfiltrap-service.log'; exit 1"
     );
     // pkexec blocks until the polkit dialog is answered — run it on a
     // blocking worker so the webview UI never freezes.
@@ -161,9 +200,16 @@ async fn start_service(
     if out.status.success() {
         Ok("service start requested".into())
     } else {
+        // The script reports its own failures (copy errors, launch check)
+        // on stdout; pkexec/policy errors arrive on stderr.
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         let code = out.status.code().unwrap_or(-1);
-        let detail = if stderr.is_empty() {
+        let detail = if !stdout.is_empty() {
+            stdout
+        } else if !stderr.is_empty() {
+            stderr
+        } else {
             match code {
                 // No exit code = killed by a signal: the root script died
                 // before finishing (pre-1.3.1 this was its own `pkill -f`
@@ -171,8 +217,6 @@ async fn start_service(
                 -1 => "start script was killed by a signal — engine did not launch".to_string(),
                 _ => format!("exit status {code}"),
             }
-        } else {
-            stderr
         };
         Err(format!("pkexec failed: {detail}"))
     }

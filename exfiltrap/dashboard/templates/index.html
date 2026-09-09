@@ -348,7 +348,7 @@
    }
 
    async function loadAlerts() {
-     const d = await jget("/api/events?limit=200");
+     const d = await jget("/api/events?limit=500");
      if (!d) return;
      const risk = $("a-risk").value;
      const needle = $("a-search").value.toLowerCase();
