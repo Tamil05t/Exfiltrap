@@ -327,6 +327,14 @@
        $("svc-hb").textContent = s.capture_heartbeat_age_s.toFixed(1) + "s";
        $("live-dot").classList.toggle("stale", s.capture_heartbeat_age_s > 30);
      }
+     if (s.capture_healthy === false) {
+       // per-interface capture supervision: name the silent interface(s)
+       const bad = Object.entries(s.capture_ifaces || {})
+         .filter(([, v]) => !v.ok).map(([k]) => k);
+       $("svc-hb").textContent += " ⚠ " +
+           (bad.length ? bad.join("+") + " silent" : "degraded");
+       $("live-dot").classList.add("stale");
+     }
      $("foot-note").textContent =
          `${s.queries_processed ?? 0} queries processed this session`;
    }

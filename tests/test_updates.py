@@ -11,7 +11,8 @@ import pytest
 
 from exfiltrap.alerting import NullAlerter, SyslogAlerter, make_alerter
 from exfiltrap.pipeline import ExfilTrapPipeline
-from exfiltrap.service import ServiceRuntime, SystemdWatchdog
+from exfiltrap.service import (CaptureSupervisor, ServiceRuntime,
+                               SystemdWatchdog)
 from exfiltrap.storage import NullStorage, Storage
 
 
@@ -168,6 +169,147 @@ class TestWatchdog:
         assert rt.heartbeat_age() >= 49
         rt.beat()
         assert rt.heartbeat_age() < 1
+
+    def test_watchdog_pings_while_any_capture_iface_alive(
+            self, tmp_path, monkeypatch):
+        # Partial capture loss (one of two ifaces) must NOT suspend pings:
+        # the service stays up, degraded, and visible in /api/status.
+        sock_path, server = self._notify_socket(tmp_path)
+        monkeypatch.setenv("NOTIFY_SOCKET", sock_path)
+        monkeypatch.setenv("WATCHDOG_USEC", "1000000")
+        rt = ServiceRuntime("live:test")
+        rt.capture_beat("wlo1")
+        rt.capture_beat("lo")
+        with rt._lock:  # wlo1 went dead long ago
+            rt._capture["wlo1"] = (time.monotonic() - 10_000, True)
+        wd = SystemdWatchdog(rt, stall_limit=5)
+        wd.start()
+        try:
+            assert server.recv(128).decode() == "READY=1"
+            server.settimeout(3)
+            deadline = time.time() + 3
+            saw_ping = False
+            while time.time() < deadline and not saw_ping:
+                try:
+                    saw_ping = server.recv(128).decode() == "WATCHDOG=1"
+                except socket.timeout:
+                    break
+            assert saw_ping
+        finally:
+            wd.stop()
+            server.close()
+
+    def test_watchdog_suspends_when_every_iface_stale(
+            self, tmp_path, monkeypatch):
+        # Total capture blindness = process-alive-but-blind: pings stop so
+        # the systemd supervisor restarts the service.
+        sock_path, server = self._notify_socket(tmp_path)
+        monkeypatch.setenv("NOTIFY_SOCKET", sock_path)
+        monkeypatch.setenv("WATCHDOG_USEC", "1000000")
+        rt = ServiceRuntime("live:test")
+        rt.capture_beat("wlo1")
+        rt.capture_beat("lo")
+        with rt._lock:
+            rt._capture["wlo1"] = (time.monotonic() - 10_000, True)
+            rt._capture["lo"] = (time.monotonic() - 10_000, True)
+        wd = SystemdWatchdog(rt, stall_limit=5)
+        wd.start()
+        try:
+            assert server.recv(128).decode() == "READY=1"
+            server.settimeout(1.2)
+            with pytest.raises(socket.timeout):
+                server.recv(128)
+        finally:
+            wd.stop()
+            server.close()
+
+
+class TestCaptureSupervision:
+    def test_runtime_per_iface_capture_health(self):
+        rt = ServiceRuntime("live:test")
+        # Nothing supervised yet: vacuously healthy (legacy behaviour).
+        assert rt.capture_any_alive(90.0) is True
+        assert rt.status()["capture_healthy"] is None
+        rt.capture_beat("wlo1")
+        rt.capture_beat("lo")
+        assert rt.status()["capture_healthy"] is True
+        # A spawn beat alone must not fake health: ok=False is not alive.
+        rt2 = ServiceRuntime("live:test")
+        rt2.capture_beat("wlo1", ok=False)
+        assert rt2.capture_any_alive(90.0) is False
+        assert rt2.status()["capture_healthy"] is False
+        # Confirmed-alive beats age out past the stall limit.
+        rt3 = ServiceRuntime("live:test")
+        rt3.capture_beat("wlo1", ok=True)
+        with rt3._lock:
+            rt3._capture["wlo1"] = (time.monotonic() - 10_000, True)
+        assert rt3.capture_any_alive(5.0) is False
+        st = rt3.status()
+        assert st["capture_ifaces"]["wlo1"]["ok"] is False
+        assert st["capture_ifaces"]["wlo1"]["age_s"] >= 9.9
+
+    def _factory(self, sniffer_cls, calls):
+        def factory(name):
+            calls.append(name)
+            return sniffer_cls()
+        return factory
+
+    def test_supervisor_restarts_dead_sniffer(self, caplog):
+        class DeadSniffer:
+            def __init__(self):
+                self.thread = threading.Thread(target=lambda: None,
+                                               daemon=True)
+                self.thread.start()
+                self.exception = None
+
+            def stop(self, join=True):
+                pass
+
+        calls = []
+        rt = ServiceRuntime("live:test")
+        stop = threading.Event()
+        sup = CaptureSupervisor(["wlo1"], self._factory(DeadSniffer, calls),
+                                rt, stop, poll_interval=0.05)
+        with caplog.at_level("ERROR", logger="exfiltrap.service"):
+            sup.start()
+            try:
+                deadline = time.time() + 5
+                st = rt.status()
+                while time.time() < deadline:
+                    st = rt.status()
+                    if (len(calls) >= 2
+                            and st["capture_ifaces"]["wlo1"]["ok"] is False):
+                        break
+                    time.sleep(0.05)
+            finally:
+                stop.set()
+        assert len(calls) >= 2          # initial spawn + restarts
+        assert st["capture_ifaces"]["wlo1"]["ok"] is False
+        assert any("DIED" in r.getMessage() for r in caplog.records)
+
+    def test_supervisor_leaves_alive_sniffer_alone(self):
+        class AliveSniffer:
+            def __init__(self):
+                self.thread = threading.Thread(target=lambda: time.sleep(30),
+                                               daemon=True)
+                self.thread.start()
+                self.exception = None
+
+            def stop(self, join=True):
+                pass
+
+        calls = []
+        rt = ServiceRuntime("live:test")
+        stop = threading.Event()
+        sup = CaptureSupervisor(["lo"], self._factory(AliveSniffer, calls),
+                                rt, stop, poll_interval=0.05)
+        sup.start()
+        try:
+            time.sleep(0.25)
+            assert calls == ["lo"]      # exactly the initial spawn
+            assert rt.status()["capture_ifaces"]["lo"]["ok"] is True
+        finally:
+            stop.set()
 
 
 class TestMultiIpSenders:

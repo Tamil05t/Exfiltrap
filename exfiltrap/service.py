@@ -63,6 +63,8 @@ class ServiceRuntime:
         self.started_at = time.time()
         self.queries_processed = 0
         self._last_beat = time.monotonic()
+        # iface -> (last supervision tick, ok flag)
+        self._capture: dict[str, tuple[float, bool]] = {}
         self._lock = threading.Lock()
 
     def count(self) -> None:
@@ -75,6 +77,35 @@ class ServiceRuntime:
         with self._lock:
             self._last_beat = time.monotonic()
 
+    def capture_beat(self, iface: str, ok: bool = True) -> None:
+        """Per-interface liveness mark from the capture supervisor.
+
+        ``ok=True`` only ever comes from a supervisor tick that found the
+        interface's sniffer thread alive — never from spawn, so a sniffer
+        that dies instantly cannot fake health by respawning.
+        """
+        with self._lock:
+            self._capture[iface] = (time.monotonic(), ok)
+
+    def capture_ages(self) -> dict[str, float]:
+        with self._lock:
+            now = time.monotonic()
+            return {i: now - t for i, (t, _ok) in self._capture.items()}
+
+    def capture_any_alive(self, stall_limit: float) -> bool:
+        """True while at least one supervised interface is confirmed alive.
+
+        Vacuously true before any interface has been supervised (and in
+        unit tests with a bare runtime), so legacy callers keep their
+        behaviour. Total capture loss — no interface confirmed alive —
+        is what justifies suspending the systemd watchdog pings.
+        """
+        with self._lock:
+            now = time.monotonic()
+            states = [(now - t, ok) for t, ok in self._capture.values()]
+        return not states or any(ok and age <= stall_limit
+                                 for age, ok in states)
+
     def heartbeat_age(self) -> float:
         with self._lock:
             return time.monotonic() - self._last_beat
@@ -82,12 +113,20 @@ class ServiceRuntime:
     def status(self) -> dict:
         with self._lock:
             processed = self.queries_processed
+            capture = dict(self._capture)
+            now = time.monotonic()
+        ifaces = {i: {"age_s": round(now - t, 1),
+                      "ok": bool(ok and now - t <= 30.0)}
+                  for i, (t, ok) in capture.items()}
         return {
             "service": "exfiltrap",
             "mode": self.mode,
             "uptime_s": round(time.time() - self.started_at, 1),
             "queries_processed": processed,
             "capture_heartbeat_age_s": round(self.heartbeat_age(), 2),
+            "capture_ifaces": ifaces,
+            "capture_healthy": (all(v["ok"] for v in ifaces.values())
+                                if ifaces else None),
             **privileges.privilege_report(),
         }
 
@@ -137,8 +176,15 @@ class SystemdWatchdog:
 
         def loop() -> None:
             while not self._stop.wait(self.interval):
-                if self.runtime.heartbeat_age() <= self.stall_limit:
+                cap_ok = self.runtime.capture_any_alive(self.stall_limit)
+                if cap_ok and self.runtime.heartbeat_age() <= self.stall_limit:
                     self._notify("WATCHDOG=1")
+                elif not cap_ok:
+                    log.error(
+                        "every capture interface stale for %.0fs — watchdog "
+                        "pings suspended (supervisor will restart us)",
+                        self.stall_limit,
+                    )
                 else:
                     log.error(
                         "capture heartbeat stale for %.0fs — watchdog "
@@ -156,6 +202,88 @@ class SystemdWatchdog:
             self._thread.join(timeout=2.0)
 
 
+class CaptureSupervisor:
+    """Per-interface capture supervision with self-healing restarts.
+
+    scapy's AsyncSniffer silently removes a socket that dies mid-capture
+    and keeps running on the remaining interfaces (observed live: the
+    uplink socket failed and the engine kept claiming both interfaces
+    while /proc/net/packet showed only loopback). One supervised sniffer
+    per interface turns that silent blindness into a logged error and an
+    automatic restart, and feeds per-interface liveness into the status.
+    """
+
+    def __init__(self, ifaces: list[str], spawn, runtime: ServiceRuntime,
+                 stop_event: threading.Event, poll_interval: float = 2.0):
+        self.ifaces = ifaces
+        self._spawn = spawn            # iface -> sniffer object with .thread
+        self.runtime = runtime
+        self.stop_event = stop_event
+        self.poll_interval = poll_interval
+        self.sniffers: dict[str, object] = {}
+        self._failures: dict[str, int] = {}
+        self._thread: threading.Thread | None = None
+
+    def _alive(self, sniffer) -> bool:
+        th = getattr(sniffer, "thread", None)
+        return th is not None and th.is_alive()
+
+    def spawn_one(self, iface: str):
+        sniffer = self._spawn(iface)
+        # Unconfirmed until a supervision tick sees the thread alive.
+        self.runtime.capture_beat(iface, ok=False)
+        log.info("capture on %s started", iface)
+        return sniffer
+
+    def _supervise(self) -> None:
+        while not self.stop_event.wait(self.poll_interval):
+            for iface in self.ifaces:
+                sniffer = self.sniffers.get(iface)
+                if sniffer is not None and self._alive(sniffer):
+                    self.runtime.capture_beat(iface, ok=True)
+                    self._failures[iface] = 0
+                    continue
+                exc = getattr(sniffer, "exception", None) if sniffer else None
+                self.runtime.capture_beat(iface, ok=False)
+                n = self._failures.get(iface, 0) + 1
+                self._failures[iface] = n
+                if n == 1:
+                    log.error(
+                        "capture on %s DIED%s — packets on this interface "
+                        "are being missed; restarting",
+                        iface, f" ({exc})" if exc else "")
+                elif n % 15 == 0:
+                    log.warning("capture on %s still failing (attempt %d)",
+                                iface, n)
+                try:
+                    self.sniffers[iface] = self.spawn_one(iface)
+                except Exception as exc2:  # noqa: BLE001
+                    log.error("capture on %s restart failed: %s",
+                              iface, exc2)
+
+    def start(self) -> None:
+        for iface in self.ifaces:
+            try:
+                self.sniffers[iface] = self.spawn_one(iface)
+            except Exception as exc:  # noqa: BLE001
+                self.runtime.capture_beat(iface, ok=False)
+                log.error("capture on %s failed to start: %s — will retry",
+                          iface, exc)
+        self._thread = threading.Thread(target=self._supervise, daemon=True,
+                                        name="capture-supervisor")
+        self._thread.start()
+
+    def stop_all(self) -> None:
+        self.stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=3.0)
+        for sniffer in self.sniffers.values():
+            try:
+                sniffer.stop(join=False)
+            except Exception:  # noqa: BLE001 — shutdown is best-effort
+                pass
+
+
 def run_capture_feed(pipeline: ExfilTrapPipeline, runtime: ServiceRuntime,
                      stop_event: threading.Event, iface: str,
                      batch_size: int = 64) -> None:
@@ -165,11 +293,14 @@ def run_capture_feed(pipeline: ExfilTrapPipeline, runtime: ServiceRuntime,
     of machine; draining up to ``batch_size`` queued events and scoring
     them in one vectorized call sustains ~8x that, so 20k+ query bursts
     drain in minutes instead of hours.
+
+    Each interface gets its own supervised sniffer (see CaptureSupervisor)
+    feeding one shared queue.
     """
     import exfiltrap.capture as capture
 
     out_queue: queue.Queue = queue.Queue()
-    sniffer = capture.make_sniffer(iface, out_queue)
+    ifaces = iface if isinstance(iface, list) else [iface]
 
     def worker() -> None:
         while not stop_event.is_set():
@@ -199,11 +330,13 @@ def run_capture_feed(pipeline: ExfilTrapPipeline, runtime: ServiceRuntime,
                 runtime.count()
 
     thread = threading.Thread(target=worker, daemon=True)
-    sniffer.start()
+    supervisor = CaptureSupervisor(
+        ifaces, lambda name: capture.make_sniffer(name, out_queue),
+        runtime, stop_event)
     thread.start()
-    log.info("capturing on %s (batched x%d)", iface, batch_size)
+    supervisor.start()
     stop_event.wait()
-    sniffer.stop()
+    supervisor.stop_all()
     thread.join(timeout=3.0)
 
 
