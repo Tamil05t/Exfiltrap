@@ -88,18 +88,81 @@ def _push(event, out_queue: queue.Queue) -> None:
         out_queue.put(event)
 
 
+def make_deduper() -> "DuplicateFilter":
+    """Build a capture-path duplicate filter (one per capture feed).
+
+    AF_PACKET on loopback delivers EVERY packet twice (once as the
+    outgoing copy, once as the incoming copy — observed live: 88 DNS
+    queries produced 176 stored rows). Doubled queries destroy the
+    inter-arrival statistics the beacon detector lives on (gaps alternate
+    0.0 s / 5.5 s → CV ≈ 1) and inflate every per-source count. The filter
+    drops an event identical to one seen within the last few seconds.
+    """
+    return DuplicateFilter()
+
+
+class DuplicateFilter:
+    """Content+time keyed sliding window of recently seen capture events."""
+
+    _MAX_KEYS = 512
+
+    def __init__(self) -> None:
+        import collections
+
+        self._recent: collections.OrderedDict[tuple, None] = \
+            collections.OrderedDict()
+        self._lock = threading.Lock()
+
+    def is_duplicate(self, event) -> bool:
+        """True when this exact event was already admitted (loopback echo).
+
+        The key is (event type, source, qname, timestamp at 10 ms
+        resolution) — two genuine different queries never collide; the two
+        copies of one loopback packet always do.
+        """
+        ts = getattr(event, "timestamp", None)
+        if ts is None:
+            return False
+        key = (type(event).__name__, getattr(event, "src_ip", None),
+               getattr(event, "client_ip", None),
+               getattr(event, "qname", None), round(float(ts), 2))
+        with self._lock:
+            if key in self._recent:
+                return True
+            self._recent[key] = None
+            self._recent.move_to_end(key)
+            while len(self._recent) > self._MAX_KEYS:
+                self._recent.popitem(last=False)
+            return False
+
+
 def _classify(pkt):
     """Sniffer callback body: queries and responses both reach the pipeline."""
     return packet_to_query(pkt) or packet_to_response(pkt)
 
 
 def make_sniffer(iface: str | list[str],
-                 out_queue: queue.Queue) -> AsyncSniffer:
-    """Build (do not start) an async sniffer feeding the queue."""
+                 out_queue: queue.Queue,
+                 dedup: bool = True) -> AsyncSniffer:
+    """Build (do not start) an async sniffer feeding the queue.
+
+    ``dedup=True`` (default) drops loopback TX/RX echo duplicates before
+    they reach the pipeline — see DuplicateFilter.
+    """
+    deduper = make_deduper() if dedup else None
+
+    def _prn(pkt) -> None:
+        event = _classify(pkt)
+        if event is None:
+            return
+        if deduper is not None and deduper.is_duplicate(event):
+            return
+        out_queue.put(event)
+
     return AsyncSniffer(
         iface=iface,
         filter=config.CAPTURE_BPF_FILTER,
-        prn=lambda pkt: _push(_classify(pkt), out_queue),
+        prn=_prn,
         store=False,
     )
 

@@ -252,3 +252,27 @@ class TestDomainLevelSignals:
             state = tracker.update("h", i * 65.0, 4.0, 2.5)  # no qname
         assert state.velocity_candidate is False
         assert state.domain_beacon is False
+
+    def test_domain_beacon_refires_after_idle_gap(self):
+        # Live soak regression (2026-09-10): the beacon CV was computed
+        # over ALL gaps inside the 2 h window, so one 10-minute idle gap
+        # between beacon sessions pushed CV past the gate and the beacon
+        # NEVER fired again — the detector was one-shot per window. The
+        # trailing-gaps rule must re-fire on every machine-periodic run.
+        tracker = SessionTracker(baseline=None)
+        t = 0.0
+        state = None
+        for i in range(22):                      # session 1: fires
+            t += 5.5
+            state = tracker.update("h", t, 12.0, 3.6,
+                                   qname=f"hb{i:03d}.c2beacon.example")
+        assert state.domain_beacon is True
+        t += 600.0                               # 10-minute idle gap
+        fired_second = False
+        for i in range(22):                      # session 2: must re-fire
+            t += 5.5
+            state = tracker.update("h", t, 12.0, 3.6,
+                                   qname=f"hb{i:03d}.c2beacon.example")
+            if state.domain_beacon:
+                fired_second = True
+        assert fired_second, "beacon must re-fire after an idle gap"

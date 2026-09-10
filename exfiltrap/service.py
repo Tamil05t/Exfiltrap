@@ -302,6 +302,13 @@ def run_capture_feed(pipeline: ExfilTrapPipeline, runtime: ServiceRuntime,
     out_queue: queue.Queue = queue.Queue()
     ifaces = iface if isinstance(iface, list) else [iface]
 
+    def _spawn_running(name: str):
+        """Factory contract: return an already-STARTED sniffer — the
+        supervisor only checks liveness and replaces dead instances."""
+        sniffer = capture.make_sniffer(name, out_queue)
+        sniffer.start()
+        return sniffer
+
     def worker() -> None:
         while not stop_event.is_set():
             runtime.beat()  # capture-loop liveness, even when idle
@@ -330,9 +337,7 @@ def run_capture_feed(pipeline: ExfilTrapPipeline, runtime: ServiceRuntime,
                 runtime.count()
 
     thread = threading.Thread(target=worker, daemon=True)
-    supervisor = CaptureSupervisor(
-        ifaces, lambda name: capture.make_sniffer(name, out_queue),
-        runtime, stop_event)
+    supervisor = CaptureSupervisor(ifaces, _spawn_running, runtime, stop_event)
     thread.start()
     supervisor.start()
     stop_event.wait()

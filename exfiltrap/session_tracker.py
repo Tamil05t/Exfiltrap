@@ -142,11 +142,25 @@ class SessionTracker:
                     and entropy >= config.DOMAIN_VELOCITY_MIN_ENTROPY):
                 velocity_flag = True
             if len(dq2) >= config.DOMAIN_BEACON_MIN_QUERIES:
-                dcv = interval_cv(list(dq2))
-                if dcv is not None and dcv < config.DOMAIN_BEACON_MAX_CV:
-                    gaps = [b2 - a2 for a2, b2 in zip(list(dq2), list(dq2)[1:])]
-                    if gaps and statistics.fmean(gaps) >= config.DOMAIN_BEACON_MIN_INTERVAL:
-                        domain_beacon = True
+                gaps = [b2 - a2 for a2, b2 in zip(list(dq2), list(dq2)[1:])]
+                # Judge regularity on the TRAILING gaps only: over a 2 h
+                # window the gap series of an ongoing periodic beacon is
+                # poisoned by every idle period between sessions (one
+                # 10-minute gap among 5.5 s gaps pushes CV past the gate
+                # and the beacon never fires again — observed live), and
+                # the attacker gains a permanent silence after the first
+                # detection. The last MIN_QUERIES-1 gaps are exactly the
+                # current machine-periodic run.
+                tail = gaps[-(config.DOMAIN_BEACON_MIN_QUERIES - 1):]
+                if len(tail) >= 2:
+                    mean_gap = statistics.fmean(tail)
+                    if mean_gap > 0:
+                        var = sum((g - mean_gap) ** 2
+                                  for g in tail) / len(tail)
+                        dcv = (var ** 0.5) / mean_gap
+                        if (dcv < config.DOMAIN_BEACON_MAX_CV
+                                and mean_gap >= config.DOMAIN_BEACON_MIN_INTERVAL):
+                            domain_beacon = True
 
         query_count = len(dq)
         cumulative = sum(m for _, m in dq)

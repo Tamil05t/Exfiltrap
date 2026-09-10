@@ -91,3 +91,40 @@ class TestQueue:
         assert q.qsize() == 1
         _push(None, q)  # malformed never enqueued
         assert q.qsize() == 1
+
+
+class TestDuplicateFilter:
+    def test_loopback_echo_dropped(self):
+        # AF_PACKET on lo delivers every packet twice (TX + RX copy):
+        # the second identical event must be dropped (live soak finding:
+        # 88 queries -> 176 stored rows, beacon CV destroyed by the
+        # alternating 0.0 s / 5.5 s gaps).
+        from exfiltrap.capture import make_deduper
+        from exfiltrap.events import DNSQuery
+
+        ded = make_deduper()
+        a = DNSQuery("127.0.0.1", "hb001.c2beacon.example", 1000.0)
+        b = DNSQuery("127.0.0.1", "hb001.c2beacon.example", 1000.0)
+        assert ded.is_duplicate(a) is False
+        assert ded.is_duplicate(b) is True      # same packet, second copy
+
+    def test_distinct_events_kept(self):
+        from exfiltrap.capture import make_deduper
+        from exfiltrap.events import DNSQuery
+
+        ded = make_deduper()
+        assert ded.is_duplicate(DNSQuery("h1", "a.example", 1000.0)) is False
+        # genuine retransmission 1 s later: different timestamp, kept
+        assert ded.is_duplicate(DNSQuery("h1", "a.example", 1001.0)) is False
+        # different source, same instant + qname: kept (per-src windows)
+        assert ded.is_duplicate(DNSQuery("h2", "a.example", 1000.0)) is False
+
+    def test_lru_bound(self):
+        from exfiltrap.capture import DuplicateFilter
+        from exfiltrap.events import DNSQuery
+
+        ded = DuplicateFilter()
+        for i in range(600):
+            ded.is_duplicate(DNSQuery("h", f"x{i}.example", 1000.0 + i))
+        # the first key was evicted by the LRU bound: re-admitted
+        assert ded.is_duplicate(DNSQuery("h", "x0.example", 1000.0)) is False
