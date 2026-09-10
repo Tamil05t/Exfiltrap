@@ -108,14 +108,23 @@ def detection_latency(pairs: list[tuple[float, bool, bool]],
 # ----------------------------------------------------------------------
 # Profile execution
 # ----------------------------------------------------------------------
-def build_stream(profile: str, slow_drip_duration: float | None = None
-                 ) -> list[LabeledQuery]:
-    """Deterministic merged (benign [+ attack]) stream for one profile."""
+def build_stream(profile: str, slow_drip_duration: float | None = None,
+                 benign_seed: int | None = None,
+                 attack_seed: int | None = None,
+                 payload_seed: int | None = None) -> list[LabeledQuery]:
+    """Deterministic merged (benign [+ attack]) stream for one profile.
+
+    Seed overrides exist for --multiseed: every trial rolls fresh seeds so
+    the statistics are computed over genuinely different traffic, while the
+    full-pipeline run and its RF-only control within one trial always see
+    the IDENTICAL stream (fair paired comparison).
+    """
     spec = PROFILES[profile]
     duration = slow_drip_duration if (profile == "slow-drip"
                                       and slow_drip_duration) else spec["duration"]
     stream = benign_gen.generate_traffic(
-        duration=duration, qps=BENIGN_QPS, seed=BENIGN_SEED,
+        duration=duration, qps=BENIGN_QPS,
+        seed=BENIGN_SEED if benign_seed is None else benign_seed,
         src_ip=config.ATTACKER_IP,
     )
     # Spread the benign background across distinct client IPs.
@@ -124,18 +133,27 @@ def build_stream(profile: str, slow_drip_duration: float | None = None
         for i, rec in enumerate(stream)
     ]
     if spec["attack"]:
+        payload = (ATTACK_PAYLOAD if payload_seed is None
+                   else attacker.make_sample_payload(seed=payload_seed,
+                                                     size=3072))
         stream += attacker.generate_traffic(
-            spec["attack"], ATTACK_PAYLOAD, duration=duration,
-            seed=spec["attack_seed"], src_ip=config.ATTACKER_IP,
+            spec["attack"], payload, duration=duration,
+            seed=spec["attack_seed"] if attack_seed is None else attack_seed,
+            src_ip=config.ATTACKER_IP,
         )
     stream.sort(key=lambda r: r.query.timestamp)
     return stream
 
 
 def run_profile(profile: str, rf_only: bool, classifier=None,
-                slow_drip_duration: float | None = None) -> dict:
+                slow_drip_duration: float | None = None,
+                benign_seed: int | None = None,
+                attack_seed: int | None = None,
+                payload_seed: int | None = None) -> dict:
     """One full run of the detector over one profile's traffic."""
-    stream = build_stream(profile, slow_drip_duration)
+    stream = build_stream(profile, slow_drip_duration,
+                          benign_seed=benign_seed, attack_seed=attack_seed,
+                          payload_seed=payload_seed)
     classifier = classifier if classifier is not None else DNSClassifier.load()
     pipeline = ExfilTrapPipeline(
         rf_only=rf_only, classifier=classifier, storage=NullStorage(),
@@ -191,6 +209,76 @@ def _write_csv(path: Path, row: dict) -> None:
         writer.writerow(row)
 
 
+def run_multiseed(trials: int, out_dir: Path, classifier=None) -> dict:
+    """N randomized paired trials of the slow-drip profile (paper Table 2).
+
+    Each trial draws fresh benign/attack/payload seeds and evaluates the
+    full pipeline AND the RF-only control on that trial's identical stream.
+    Emits per-trial recalls, mean ± SD, and the paired-samples t-test —
+    the exact statistics the paper's statistical-analysis section claims.
+    """
+    import json
+    import random
+
+    try:
+        from scipy import stats as sps
+    except ImportError:                       # pragma: no cover
+        sps = None
+
+    classifier = classifier if classifier is not None else DNSClassifier.load()
+    full_rec, ctrl_rec, full_fpr, ctrl_fpr = [], [], [], []
+    for t in range(trials):
+        rng = random.Random(50_000 + t)
+        seeds = (rng.randrange(1, 1 << 30), rng.randrange(1, 1 << 30),
+                 rng.randrange(1, 1 << 30))
+        res_f = run_profile("slow-drip", False, classifier=classifier,
+                            benign_seed=seeds[0], attack_seed=seeds[1],
+                            payload_seed=seeds[2])
+        res_c = run_profile("slow-drip", True, classifier=classifier,
+                            benign_seed=seeds[0], attack_seed=seeds[1],
+                            payload_seed=seeds[2])
+        full_rec.append(res_f["recall"])
+        ctrl_rec.append(res_c["recall"])
+        full_fpr.append(res_f["fpr"])
+        ctrl_fpr.append(res_c["fpr"])
+        print(f"[trial {t}] seeds={seeds} "
+              f"full_rec={res_f['recall']:.4f} ctrl_rec={res_c['recall']:.4f} "
+              f"fpr full={res_f['fpr']:.4f} ctrl={res_c['fpr']:.4f}",
+              flush=True)
+
+    mean = lambda v: sum(v) / len(v)
+    sd = lambda v: (sum((x - mean(v)) ** 2 for x in v) / (len(v) - 1)) ** 0.5
+    deltas = [a - b for a, b in zip(full_rec, ctrl_rec)]
+    md, sdd = mean(deltas), sd(deltas)
+    t_stat = md / (sdd / (len(deltas) ** 0.5)) if sdd else float("inf")
+    if sps is not None:
+        t_stat, p_value = sps.ttest_rel(full_rec, ctrl_rec)
+        t_stat, p_value = float(t_stat), float(p_value)
+    else:                                     # pragma: no cover
+        p_value = None
+
+    report = {
+        "trials": trials,
+        "full_recall": full_rec, "ctrl_recall": ctrl_rec,
+        "mean_full_recall": mean(full_rec), "std_full_recall": sd(full_rec),
+        "mean_ctrl_recall": mean(ctrl_rec), "std_ctrl_recall": sd(ctrl_rec),
+        "mean_full_precision_fpr": mean(full_fpr),
+        "mean_ctrl_fpr": mean(ctrl_fpr),
+        "std_benign_fpr_full": sd(full_fpr), "std_benign_fpr_ctrl": sd(ctrl_fpr),
+        "t_stat": t_stat, "p_value": p_value,
+    }
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with (out_dir / "multiseed_stats.json").open("w") as fh:
+        json.dump(report, fh, indent=1)
+    print(f"\n=== multiseed ({trials} trials, slow-drip) ===")
+    print(f"full   recall: {mean(full_rec):.4f} ± {sd(full_rec):.4f}")
+    print(f"ctrl   recall: {mean(ctrl_rec):.4f} ± {sd(ctrl_rec):.4f}")
+    print(f"paired t={t_stat:.2f}, p={p_value if p_value is not None else 'n/a (no scipy)'}")
+    print(f"benign FPR: full={mean(full_fpr):.4f} ctrl={mean(ctrl_fpr):.4f}")
+    print(f"stats written to {out_dir / 'multiseed_stats.json'}")
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="run_evaluation",
@@ -206,6 +294,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="run only the control")
     parser.add_argument("--full-only", action="store_true",
                         help="run only the full pipeline")
+    parser.add_argument("--multiseed", type=int, default=None, metavar="N",
+                        help="run N randomized paired slow-drip trials "
+                             "(full vs RF-only) and write multiseed_stats.json")
     parser.add_argument("--live", action="store_true",
                         help="print the namespace-based live procedure and exit")
     args = parser.parse_args(argv)
@@ -214,11 +305,17 @@ def main(argv: list[str] | None = None) -> int:
         print(LIVE_INSTRUCTIONS)
         return 0
 
+    out_dir = Path(args.out_dir) if args.out_dir else config.EVAL_RESULTS_DIR
+
+    if args.multiseed:
+        classifier = DNSClassifier.load(args.classifier)
+        run_multiseed(args.multiseed, out_dir, classifier=classifier)
+        return 0
+
     profiles = [p.strip() for p in args.profiles.split(",") if p.strip()]
     bad = [p for p in profiles if p not in PROFILES]
     if bad:
         parser.error(f"unknown profiles: {bad} (choose from {list(PROFILES)})")
-    out_dir = Path(args.out_dir) if args.out_dir else config.EVAL_RESULTS_DIR
 
     classifier = DNSClassifier.load(args.classifier)
     modes = []

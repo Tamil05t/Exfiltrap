@@ -37,6 +37,7 @@ import time
 import urllib.request
 
 API = "http://127.0.0.1:5050"
+UP_RESOLVER = None                   # resolved upstream (set in main())
 STUB = "127.0.0.53"                 # systemd-resolved (loopback session)
 DEFAULT_TUNNEL = "tunnel.example"   # IETF-reserved for documentation
 
@@ -320,7 +321,7 @@ def mixed_smoke(s, rng, it, tunnel):
     stop = threading.Event()
 
     def background():
-        bs = DnsSender(STUB)
+        bs = DnsSender(UP_RESOLVER or STUB)
         while not stop.is_set():
             bs.query(rng.choice(EVERYDAY))
             time.sleep(1.0 / bgqps)
@@ -575,6 +576,9 @@ def main(argv=None) -> int:
                    help="run the scripted 5-act demo story")
     p.add_argument("--tunnel", default=DEFAULT_TUNNEL,
                    help=f"attack zone label (default {DEFAULT_TUNNEL})")
+    p.add_argument("--resolver", default=None,
+                   help="DNS server to send to (default: auto-detect the "
+                        "system upstream resolver; port is always 53)")
     p.add_argument("--api", default=API, help="engine API base URL")
     a = p.parse_args(argv)
 
@@ -587,7 +591,9 @@ def main(argv=None) -> int:
             print(f"{s['key']:20s} {s['title']:38s} {s['expect'][:40]}")
         return 0
 
-    up = upstream_resolver()
+    up = a.resolver or upstream_resolver()
+    global UP_RESOLVER
+    UP_RESOLVER = up
     info = engine_info()
     print(f"engine API : {API}")
     if info:

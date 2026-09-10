@@ -33,7 +33,7 @@ Tiruchengode-637215, India.
 
 ## ABSTRACT
 
-**Aim:** To design and deploy ExfilTrap, a real-time detection and automated mitigation framework achieving over 90% recall against covert DNS tunneling and slow-drip data exfiltration strategies that evade per-query machine learning detection. **Materials and Methods:** Group 1 represents the existing per-query Random Forest detection approach, in which each DNS query is independently classified using entropy, domain length, subdomain count and query-frequency features, achieving high accuracy on loud tunneling but degrading to 34.55% recall against low-and-slow adversaries. Group 2 represents the proposed ExfilTrap pipeline, which augments the Random Forest classifier with a stateful session layer that accumulates entropy-weighted byte mass per source inside a two-hour sliding window and applies a sequential z-test against a self-learning EWMA–Welford baseline, together with a beacon-regularity detector based on the coefficient of variation of inter-arrival times, a payload decoder (Base32/Base64/Hex with file-signature matching), a deterministic risk engine and an automated, policy-gated firewall mitigation module. **Result:** Experimental evaluation over randomized multi-seed trials demonstrates a mean slow-drip recall of 92.36% (SD 0.73) for the proposed full pipeline against 36.55% (SD 2.60) for the per-query approach — an improvement of 55.81 percentage points (paired t = 42.78, p < 0.001) — while simultaneously reducing the false-positive rate on benign traffic from 3.59% to 0.81%. Fast tunneling is detected at 100% recall with 71.43% of queries yielding successfully decoded plaintext payloads, and the sustained processing capacity of 283 queries per second supports more than 24 million queries per day on a single core. **Conclusion:** The proposed ExfilTrap framework is a lightweight, deployable and statistically validated detection and mitigation system that closes the detection gap left by per-query classifiers against stealthy low-and-slow DNS exfiltration, and reduces false positives by 77% relative to the existing approach.
+**Aim:** To design and deploy ExfilTrap, a real-time detection and automated mitigation framework achieving high recall against covert DNS tunneling and slow-drip data exfiltration strategies that evade per-query machine learning detection. **Materials and Methods:** Group 1 represents the existing per-query Random Forest detection approach, in which each DNS query is independently classified using entropy, domain length, subdomain count and query-frequency features, achieving high accuracy on loud tunneling but degrading to 40.36% recall against low-and-slow adversaries. Group 2 represents the proposed ExfilTrap pipeline, which augments the Random Forest classifier with a stateful session layer that accumulates entropy-weighted byte mass per source inside a two-hour sliding window and applies a sequential z-test against a self-learning EWMA–Welford baseline, together with a beacon-regularity detector based on the coefficient of variation of inter-arrival times, a payload decoder (Base32/Base64/Hex with file-signature matching), a deterministic risk engine and an automated, policy-gated firewall mitigation module. **Result:** Experimental evaluation over randomized multi-seed trials demonstrates a mean slow-drip recall of 84.73% (SD 0.76) for the proposed full pipeline against 40.36% (SD 4.53) for the per-query approach — an improvement of 44.37 percentage points (paired t = 25.94, p < 0.001) — while simultaneously reducing the false-positive rate on benign traffic from 4.40% to 0.81%. Fast tunneling is detected at 100% recall with 71.43% of queries yielding successfully decoded plaintext payloads, and the sustained processing capacity of 283 queries per second supports more than 24 million queries per day on a single core. **Conclusion:** The proposed ExfilTrap framework is a lightweight, deployable and statistically validated detection and mitigation system that closes the detection gap left by per-query classifiers against stealthy low-and-slow DNS exfiltration, and reduces false positives by 82% relative to the existing approach.
 
 **KEYWORDS:** DNS Tunneling; Data Exfiltration; Random Forest; Machine Learning; Network Intrusion Detection; Slow-Drip Exfiltration; Behavioural Traffic Profiling; Covert Channel; Automated Mitigation; Sequential Z-Test.
 
@@ -87,9 +87,9 @@ The per-trial recalls of the two groups were compared with a paired samples t-te
 
 The ExfilTrap framework was assessed in terms of its effectiveness in detecting loud tunneling, stealthy slow-drip exfiltration and ordinary benign traffic, in addition to its operational behaviour under sustained load and in a live deployment on real kernel network traffic.
 
-The per-profile evaluation demonstrates that the proposed full pipeline matches the per-query approach on loud tunneling and decisively outperforms it on the stealth workload. On the fast-tunneling profile both groups achieve 100.00% recall, but the full pipeline sustains an accuracy of 99.97% against 99.83% and cuts the false-positive rate from 3.67% to 0.67% (Table 1). On the slow-drip profile the full pipeline achieves 92.73% recall against 34.55% for the per-query approach, while raising precision from 13.52% to 60.36% and overall accuracy from 95.69% to 98.97% — the stateful layer contributes 58.18 percentage points of recall on this profile (Table 1).
+The per-profile evaluation demonstrates that the proposed full pipeline matches the per-query approach on loud tunneling and decisively outperforms it on the stealth workload. On the fast-tunneling profile both groups achieve 100.00% recall, but the full pipeline sustains an accuracy of 99.98% against 99.81% and cuts the false-positive rate from 4.00% to 0.33% (Table 1). On the slow-drip profile the full pipeline achieves 85.45% recall against 37.27% for the per-query approach, while raising precision from 12.39% to 64.83% and overall accuracy from 95.09% to 99.08% — the stateful layer contributes 48.18 percentage points of recall on this profile (Table 1).
 
-Across five randomized trials, slow-drip recall of the proposed system averaged 92.36% with a standard deviation of 0.73, in contrast with the per-query approach's average of 36.55% and standard deviation of 2.60 (Table 2). The paired samples t-test provided the value of t = 42.78 and a p-value of 1.78 × 10⁻⁶ (Table 2). Since the value of p < 0.05, it can be said that the difference is highly significant.
+Across five randomized trials, slow-drip recall of the proposed system averaged 84.73% with a standard deviation of 0.76, in contrast with the per-query approach's average of 40.36% and standard deviation of 4.53 (Table 2). The paired samples t-test provided the value of t = 25.94 and a p-value of 1.31 × 10⁻⁵ (Table 2). Since the value of p < 0.05, it can be said that the difference is highly significant.
 
 Payload decoding and mitigation behaviour were validated end-to-end in a live deployment on the isolated laboratory: 1,857 real DNS packets were processed, 664 fast-tunnel queries were CONFIRMED with plaintext payloads reconstructed in the logs (for example, b'56568;budget report ledger policy kernel'), an automated DROP rule was installed inside the monitored namespace at detection time, a post-block canary probe showed five out of five injected packets discarded by the rule counter while the host firewall remained byte-identical to its pre-deployment baseline, and detection latency on the slow-drip profile was 130 seconds from attack start — two queries into the drip (Table 3).
 
@@ -99,11 +99,11 @@ Scale and robustness validation confirms the framework is suitable as a daily-dr
 
 **Para 1:**
 
-The proposed stateful ExfilTrap system shows a strong improvement in stealthy exfiltration detection. It achieves 92.36% mean slow-drip recall where the per-query classifier achieves 36.55%, while simultaneously reducing the false-positive rate on benign traffic from 3.59% to 0.81%.
+The proposed stateful ExfilTrap system shows a strong improvement in stealthy exfiltration detection. It achieves 84.73% mean slow-drip recall where the per-query classifier achieves 40.36%, while simultaneously reducing the false-positive rate on benign traffic from 4.40% to 0.81%.
 
 **Para 2:**
 
-The findings agree with the results of earlier studies cautioning against per-packet classification of covert channels: entropy-only detectors drop below 40% detection on Hex or encrypted encodings [7], volume-based statistical methods cannot see drip-paced sessions [8], and per-query deep sequence models remain exploitable when the adversary matches label statistics to the benign distribution [11]. Timing-based beacon detection has been reported at 90%–95% precision in the HTTP domain [9], and the DNS beacon detector proposed here behaves consistently: it fired on every machine-periodic session in both the evaluation and the live deployment while never flagging Poisson-arriving benign traffic, and a minimum-interval guard (5 s) correctly exempts fast keepalive-style pollers. The sequential z-test formulation inherits the statistical guarantees of sequential analysis [10] while remaining computationally trivial — a single subtraction and division per query. However, some limitations remain. Precision on the slow-drip profile averages 63.8%, because a small fraction of benign hash-label queries shares the entropy band the tunnel must occupy and is escalated alongside the true positives; the reported mitigations (allowlists and TTL-based unbanning) reduce the operational impact but do not eliminate the underlying overlap. The payload decoder confirms only 1.82% of slow-drip queries by design — the stealth adversary encrypts its payload, and ciphertext is neither printable nor signature-bearing — so confirmation-based evidence remains meaningful only against plaintext tunnels (71.43% decode rate on the fast profile). The evaluation corpus, while drawn from 50,000 real domains, is a laboratory simulation; resolver farms handling 100,000+ queries per second would require the per-forwarder sharding outlined as future work.
+The findings agree with the results of earlier studies cautioning against per-packet classification of covert channels: entropy-only detectors drop below 40% detection on Hex or encrypted encodings [7], volume-based statistical methods cannot see drip-paced sessions [8], and per-query deep sequence models remain exploitable when the adversary matches label statistics to the benign distribution [11]. Timing-based beacon detection has been reported at 90%–95% precision in the HTTP domain [9], and the DNS beacon detector proposed here behaves consistently: it fired on every machine-periodic session in both the evaluation and the live deployment while never flagging Poisson-arriving benign traffic, and a minimum-interval guard (5 s) correctly exempts fast keepalive-style pollers. The sequential z-test formulation inherits the statistical guarantees of sequential analysis [10] while remaining computationally trivial — a single subtraction and division per query. However, some limitations remain. Precision on the slow-drip profile averages 64.8%, because a small fraction of benign hash-label queries shares the entropy band the tunnel must occupy and is escalated alongside the true positives; the reported mitigations (allowlists and TTL-based unbanning) reduce the operational impact but do not eliminate the underlying overlap. The payload decoder confirms only 1.82% of slow-drip queries by design — the stealth adversary encrypts its payload, and ciphertext is neither printable nor signature-bearing — so confirmation-based evidence remains meaningful only against plaintext tunnels (71.43% decode rate on the fast profile). The evaluation corpus, while drawn from 50,000 real domains, is a laboratory simulation; resolver farms handling 100,000+ queries per second would require the per-forwarder sharding outlined as future work.
 
 **Para 3:**
 
@@ -111,29 +111,29 @@ Looking ahead, the path is more distinct and hopeful: extending the same session
 
 ## CONCLUSION
 
-In the proposed research, ExfilTrap is designed and deployed as a real-time DNS tunneling and slow-drip exfiltration detection and automated mitigation framework that combines a per-query Random Forest classifier with a stateful behavioural profiling layer. Across five randomized trials the proposed system achieved a mean slow-drip recall of 92.36% (SD 0.73) against 36.55% (SD 2.60) for the per-query approach, a difference confirmed as highly significant by a paired samples t-test (t = 42.78, p < 0.001), while reducing the benign false-positive rate from 3.59% to 0.81% and sustaining 283 queries per second of processing capacity with a flat 220 MiB memory footprint. The framework was validated end-to-end on real kernel network traffic with automated, reversible firewall mitigation, and represents a deployable, statistically validated advancement over per-query detection for covert DNS-based data exfiltration.
+In the proposed research, ExfilTrap is designed and deployed as a real-time DNS tunneling and slow-drip exfiltration detection and automated mitigation framework that combines a per-query Random Forest classifier with a stateful behavioural profiling layer. Across five randomized trials the proposed system achieved a mean slow-drip recall of 84.73% (SD 0.76) against 40.36% (SD 4.53) for the per-query approach, a difference confirmed as highly significant by a paired samples t-test (t = 25.94, p < 0.001), while reducing the benign false-positive rate from 4.40% to 0.81% and sustaining 283 queries per second of processing capacity with a flat 220 MiB memory footprint. The framework was validated end-to-end on real kernel network traffic with automated, reversible firewall mitigation, and represents a deployable, statistically validated advancement over per-query detection for covert DNS-based data exfiltration.
 
 ---
 
 ## TABLES AND FIGURES
 
-**Table 1: Per-profile detection performance (%) — existing per-query method (Group 1) versus proposed full pipeline (Group 2).** This comparative table gives accuracy, precision, recall and false-positive rate for both groups on the three evaluation profiles. The result is a 58.18-point recall improvement on slow-drip traffic, proving the efficiency of the stateful layer.
+**Table 1: Per-profile detection performance (%) — existing per-query method (Group 1) versus proposed full pipeline (Group 2).** This comparative table gives accuracy, precision, recall and false-positive rate for both groups on the three evaluation profiles. The result is a 48.18-point recall improvement on slow-drip traffic, proving the efficiency of the stateful layer.
 
 | Profile | Mode | Accuracy | Precision | Recall | FPR |
 |---|---|---|---|---|---|
-| Fast tunneling | Existing (RF-only) | 99.83 | 99.82 | 100.00 | 3.67 |
-| Fast tunneling | Proposed (full) | 99.97 | 99.97 | 100.00 | 0.67 |
-| Slow-drip | Existing (RF-only) | 95.69 | 13.52 | 34.55 | 3.38 |
-| Slow-drip | Proposed (full) | 98.97 | 60.36 | 92.73 | 0.93 |
-| Benign only | Existing (RF-only) | — | — | — | 3.38 |
-| Benign only | Proposed (full) | — | — | — | 0.93 |
+| Fast tunneling | Existing (RF-only) | 99.81 | 99.80 | 100.00 | 4.00 |
+| Fast tunneling | Proposed (full) | 99.98 | 99.98 | 100.00 | 0.33 |
+| Slow-drip | Existing (RF-only) | 95.09 | 12.39 | 37.27 | 4.03 |
+| Slow-drip | Proposed (full) | 99.08 | 64.83 | 85.45 | 0.71 |
+| Benign only | Existing (RF-only) | 95.97 | — | — | 4.03 |
+| Benign only | Proposed (full) | 99.29 | — | — | 0.71 |
 
 **Table 2: Statistical analysis summary — slow-drip recall over five randomized trials.** This table shows mean recall, standard deviation and the paired-samples t-test comparing both groups. The proposed system has a higher mean recall with far lower variance, and p < 0.05 confirms the improvement is statistically significant.
 
 | Method | Mean Recall (%) | Standard Deviation | t-value | p-value |
 |---|---|---|---|---|
-| Existing Method (RF-only) | 36.55 | 2.60 | — | — |
-| Proposed Method (full pipeline) | 92.36 | 0.73 | 42.78 | 1.78 × 10⁻⁶ |
+| Existing Method (RF-only) | 40.36 | 4.53 | — | — |
+| Proposed Method (full pipeline) | 84.73 | 0.76 | 25.94 | 1.31 × 10⁻⁵ |
 
 **Table 3: Live deployment validation on real kernel network traffic.** The following table summarizes the live-run evidence: every detection decision was applied to real packets on an isolated network namespace laboratory with real firewall enforcement.
 
@@ -164,7 +164,7 @@ In the proposed research, ExfilTrap is designed and deployed as a real-time DNS 
 | Everyday + malicious-looking domain mix (ransomware.com, c2server.com, …) | 4,800 queries | 100.00% correctly LOW |
 | Fresh random DGA-style domains (never before seen) | ≈ 1,500 queries | 100.00% correctly LOW |
 | Fast tunnel injected during 100 q/s background load | 151 queries | 151/151 flagged (100%) |
-| Randomized 5-seed evaluation variance | 5 trials | Recall SD 0.73 (stable) |
+| Randomized 5-seed evaluation variance | 5 trials | Recall SD 0.76 (stable) |
 
 **Table 6: Input vs Output Mapping of the Proposed ExfilTrap System.** The above table demonstrates the process of handling various input sources such as DNS queries and responses, then combining them for final risk outputs and mitigation actions. The above diagram is an accurate representation of the working of the ExfilTrap System.
 
@@ -190,7 +190,7 @@ In the proposed research, ExfilTrap is designed and deployed as a real-time DNS 
 
 **Fig. 4:** Live per-source session view with stateful signal badges (MASS, BEACON) — the slow-drip session is flagged by both M3 signals while benign sessions remain clean.
 
-**Fig. 5:** Slow-drip recall comparison between the existing per-query method (36.55%) and the proposed full pipeline (92.36%) averaged over five randomized trials.
+**Fig. 5:** Slow-drip recall comparison between the existing per-query method (40.36%) and the proposed full pipeline (84.73%) averaged over five randomized trials.
 
 **Fig. 6:** Live firewall enforcement evidence — DROP rule installed inside the monitored namespace and post-block canary counter delta proving packets are discarded at the IP layer.
 
