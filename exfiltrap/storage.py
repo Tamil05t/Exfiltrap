@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS queries (
     rf_probability REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_queries_ts ON queries(ts);
+CREATE INDEX IF NOT EXISTS idx_queries_risk ON queries(risk_level);
+CREATE INDEX IF NOT EXISTS idx_queries_src ON queries(src_ip);
 
 CREATE TABLE IF NOT EXISTS risk_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
