@@ -86,7 +86,12 @@ class SessionTracker:
             alpha=config.EWMA_ALPHA, k=config.BASELINE_K,
             warmup=config.BASELINE_WARMUP)
         self._sessions: dict[str, deque[tuple[float, float]]] = {}
+        # Running per-source cumulative mass — the alternative (summing the
+        # whole 2 h deque per query) is O(N²) over a session and measured
+        # ~8x slower on 20k-query floods (live scale benchmark 2026-09-10).
+        self._cum: dict[str, float] = {}
         self._resp_sessions: dict[str, deque[tuple[float, float]]] = {}
+        self._resp_cum: dict[str, float] = {}
         # Domain-level tracking: (src, base_domain) -> timestamps. The
         # per-source session mixes attack + legitimate traffic on a real
         # host (defeating mass/timing per source), but the DOMAIN view
@@ -118,8 +123,10 @@ class SessionTracker:
         mass = self.query_mass(estimated_bytes, entropy)
         dq = self._sessions.setdefault(src_ip, deque())
         cutoff = timestamp - self.window_seconds
+        popped = 0.0
         while dq and dq[0][0] <= cutoff:
-            dq.popleft()
+            popped += dq.popleft()[1]
+        self._cum[src_ip] = self._cum.get(src_ip, 0.0) - popped + mass
         dq.append((timestamp, mass))
 
         if self.baseline is not None:
@@ -163,7 +170,7 @@ class SessionTracker:
                             domain_beacon = True
 
         query_count = len(dq)
-        cumulative = sum(m for _, m in dq)
+        cumulative = self._cum.get(src_ip, 0.0)
         mean_mass = cumulative / query_count if query_count else 0.0
 
         slow_drip = False
@@ -202,9 +209,12 @@ class SessionTracker:
                 slow_drip = z_ok and (
                     pop_mean <= 1e-9 or mean_mass > config.SESSION_ELEVATION_RATIO * pop_mean)
 
-        cv = interval_cv([t for t, _ in dq])
-        intervals = [b - a for a, b in zip([t for t, _ in dq],
-                                           [t for t, _ in dq][1:])]
+        # Session-level beacon: judge the TRAILING gaps (same rationale as
+        # the domain-level test above) — the full-window CV is O(N) per
+        # query and poisoned by every idle period in the session.
+        tail_ts = [t for t, _ in list(dq)[-config.BEACON_MIN_QUERIES:]]
+        cv = interval_cv(tail_ts)
+        intervals = [b - a for a, b in zip(tail_ts, tail_ts[1:])]
         mean_interval = (sum(intervals) / len(intervals)) if intervals else 0.0
         beacon = (
             query_count >= config.BEACON_MIN_QUERIES
@@ -236,18 +246,21 @@ class SessionTracker:
         dq = self._sessions.get(src_ip)
         if not dq:
             return None
-        masses = [m for _, m in dq]
-        cumulative = sum(masses)
+        # O(1) cumulative + trailing-gap CV: this view runs per response
+        # and per dashboard snapshot — the full-deque versions were O(N)
+        # per call (O(N²) across a flood; measured 2026-09-10).
+        cumulative = self._cum.get(src_ip, 0.0)
         return SessionState(
             src_ip=src_ip,
             query_count=len(dq),
             cumulative_mass=cumulative,
-            mean_mass=cumulative / len(masses),
+            mean_mass=cumulative / len(dq),
             window_seconds=self.window_seconds,
             slow_drip_candidate=False,
             last_timestamp=dq[-1][0],
             beacon_candidate=False,
-            interval_cv=interval_cv([t for t, _ in dq]),
+            interval_cv=interval_cv(
+                [t for t, _ in list(dq)[-config.BEACON_MIN_QUERIES:]]),
         )
 
     def snapshot(self) -> dict[str, SessionState]:
@@ -274,20 +287,22 @@ class SessionTracker:
         mass = answer_bytes * weight
         dq = self._resp_sessions.setdefault(src_ip, deque())
         cutoff = timestamp - self.window_seconds
+        popped = 0.0
         while dq and dq[0][0] <= cutoff:
-            dq.popleft()
+            popped += dq.popleft()[1]
+        self._resp_cum[src_ip] = self._resp_cum.get(src_ip, 0.0) - popped + mass
         dq.append((timestamp, mass))
         self.resp_baseline.update(mass)
         resp_flag = False
+        total_mass = self._resp_cum.get(src_ip, 0.0)
         if len(dq) >= min_answers and self.resp_baseline.ready:
-            mean = sum(m for _, m in dq) / len(dq)
+            mean = total_mass / len(dq)
             sem = self.resp_baseline.population_std / (len(dq) ** 0.5)
             if sem < 1e-9:
                 resp_flag = mean > self.resp_baseline.population_mean
             else:
                 z = (mean - self.resp_baseline.population_mean) / sem
                 resp_flag = z > self.resp_baseline.k
-        total_mass = sum(m for _, m in dq)
         state = self.get(src_ip) or SessionState(
             src_ip=src_ip, query_count=0, cumulative_mass=0.0, mean_mass=0.0,
             window_seconds=self.window_seconds,
@@ -329,6 +344,9 @@ def load_state(tracker: SessionTracker, path) -> bool:
         return False
     tracker._sessions = {ip: __import__("collections").deque(
         (tuple(x) for x in dq)) for ip, dq in blob.get("sessions", {}).items()}
+    # rebuild the O(1) cumulative-mass index for the restored windows
+    tracker._cum = {ip: sum(m for _, m in dq)
+                    for ip, dq in tracker._sessions.items()}
     # (restore happens on a fresh, not-yet-running tracker: no lock needed)
     b = blob.get("baseline")
     if b and tracker.baseline is not None:

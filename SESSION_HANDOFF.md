@@ -4,7 +4,53 @@
 **Owner:** final-year student (Tamil05t on GitHub, user `tamilarasu` on the machine)
 **Repo:** https://github.com/Tamil05t/Exfiltrap (branch `main`, CI: `.github/workflows/build.yml`)
 **Local:** `/home/tamilarasu/Exfiltrap` — venv at `.venv/` (always use `.venv/bin/python`; system python3 lacks deps)
-**State at handoff:** 245 tests passing, CI green, v1.3.0 code on GitHub, artifacts built (run #37, `e52612d`)
+**State at handoff:** see §9 — 2026-09-10 soak: shipped-product validation, 4 live bugs found & fixed, paper numbers refreshed. 253 tests passing. Local commits NOT yet pushed (token lost in reboot — user must provide a fresh one).
+
+---
+
+## 9. 2026-09-10 SOAK + BUG LEDGER (latest session — read after §1)
+
+**What ran:** 2h+ three-track validation. GitHub-CI builds (1.3.2 deb + AppImage,
+run #44 — engine byte-identical to run #45) exercised in unprivileged
+`unshare -Urn` sandboxes (root userns → real AF_PACKET capture, fake DNS
+resolver, virgin DBs) while the user's live engine (wlo1, real LAN) ran the
+same scenario driver on the host. All results in /tmp/soak-exfiltrap/
+(wiped on reboot; key numbers below).
+
+**Product results:** sandbox tracks 136 attack rounds — every loud attack
+CAUGHT, every control clean. Host track 205 rounds — 153 CAUGHT, 18 control
+passes, 34 misses (all = the beacon bug below + known hard phonotactic/mass
+case on a busy shared IP). Fresh-install check: virgin DB = clean dashboard
+(0 rows); BUT the deb ships no maintainer scripts → /var/lib/exfiltrap
+DB persists across reinstalls (user's "old queries on fresh open" complaint
+— measured: 33k stale rows). Host DB reset needs the user's sudo.
+
+**Bugs found & fixed (all unit-tested + live-verified in the sandbox):**
+16. **M3b beacon never fires in shipped builds** (a) CV over ALL 2h-window
+    gaps → one 10-min idle gap between sessions kills it forever → now
+    trailing MIN_QUERIES-1 gaps (session_tracker.py). (b) AF_PACKET on lo
+    double-delivers every packet (88 queries → 176 rows) → alternating
+    0/5.5s gaps, CV≈1 → DuplicateFilter in capture.py prn path.
+17. **CaptureSupervisor never started sniffers** (spawn factory returned an
+    unstarted sniffer; thread=None → eternal restart loop). Factory now
+    starts; found by the supervisor's own restart-loop log on first run.
+18. **O(N²) pipeline** — per-query full-window sums (session mass, response
+    mass), full-window beacon CV, and median/MAD recompute per query →
+    20k-query flood scored at ~25 q/s. Now: O(1) running cumulative sums,
+    trailing-gap CV, MAD cache (recompute every 16 obs) → **571 q/s**
+    benign mix / 241 q/s unique-DGA flood in-process (paper claimed 283).
+19. **Paper draft was stale** — claimed 92.36%/36.55%/t=42.78 from a
+    pre-robustness-fix JSON. Reproduced with `make eval` (85.45%/37.27%)
+    and new `--multiseed N` mode (84.73%±0.76 vs 40.36%±4.53, t=25.94,
+    p=1.31e-5). Paper updated everywhere; multiseed_stats.json refreshed.
+
+**Verified live in sandbox after fixes:** beacon rounds on lo fire M3b
+("beacon regularity" HIGH) AND re-fire after a 3-min idle gap.
+
+**Still pending:** push the 5 local commits (user token); fresh CI build
+= 1.3.3 with all fixes; host-DB reset paste-block for the user; Windows
+install untested (no host); scapy veth capture sees no packets (kernel
+RX-ring quirk — lab-only note, real NICs fine).
 
 ---
 

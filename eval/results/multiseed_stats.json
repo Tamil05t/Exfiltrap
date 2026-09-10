@@ -18,9 +18,9 @@
  "std_full_recall": 0.007606000241218864,
  "mean_ctrl_recall": 0.4036363636363636,
  "std_ctrl_recall": 0.04527236217450447,
- "mean_full_precision_fpr": 0.008083333333333335,
+ "mean_full_precision_fpr": 0.009666666666666667,
  "mean_ctrl_fpr": 0.044,
- "std_benign_fpr_full": 0.0014809750291740363,
+ "std_benign_fpr_full": 0.0022343419502433557,
  "std_benign_fpr_ctrl": 0.002933812040063193,
  "t_stat": 25.93690736849343,
  "p_value": 1.3127645957721426e-05

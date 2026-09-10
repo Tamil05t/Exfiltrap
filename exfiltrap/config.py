@@ -49,6 +49,7 @@ DOMAIN_VELOCITY_COUNT = 15      # queries to one base domain...
 DOMAIN_VELOCITY_WINDOW = 60.0   # ...within this many seconds...
 DOMAIN_VELOCITY_MIN_ENTROPY = 3.0  # ...with labels this entropy or higher
 DOMAIN_BEACON_MIN_QUERIES = 20  # per-domain observations before beacon test
+BASELINE_STATS_RECOMPUTE_EVERY = 16  # median/MAD recompute cadence (O(W log W) amortized)
 DOMAIN_BEACON_MAX_CV = 0.25
 DOMAIN_BEACON_MIN_INTERVAL = 5.0
 # ASSUMPTION: intervals below this CV count as machine-periodic. 0.25 sits

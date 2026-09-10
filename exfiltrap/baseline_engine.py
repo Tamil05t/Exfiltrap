@@ -41,6 +41,11 @@ class BaselineEngine:
         # mean/std are dominated by bursts. A rolling window + median/MAD
         # gives an outlier-resistant baseline for the session z-test.
         self._window: deque[tuple[float, str | None]] = deque(maxlen=4000)
+        # Median/MAD cache (see population_stats_excluding): recomputed at
+        # most every _recompute_every observations.
+        self._recompute_every = config.BASELINE_STATS_RECOMPUTE_EVERY
+        self._stats_cache: tuple[str | None, tuple[float, float, int], int] | None = None
+        self._mad_cache: tuple[float, int] | None = None
 
     def update(self, observed: float, src: str | None = None) -> float:
         """Fold one observation in; returns the updated EWMA mean."""
@@ -100,13 +105,27 @@ class BaselineEngine:
         otherwise the attacker's own heavy queries drag the baseline
         toward them (observed live: baseline mean poisoned to 21.6).
         Returns None when too few independent samples remain.
+
+        The two medians cost O(W log W) per call; recomputing them for
+        every query made 20k-query floods O(N²) (measured 2026-09-10:
+        ~160 q/s at 5k queries and falling). The result is cached and
+        recomputed at most every BASELINE_STATS_RECOMPUTE_EVERY
+        observations — over a 4000-slot window, 16 new observations
+        shift the medians negligibly.
         """
+        if (self._stats_cache is not None
+                and self._stats_cache[0] == src
+                and self._n - self._stats_cache[2] < self._recompute_every):
+            return self._stats_cache[1]
         vals = [m for (m, s) in self._window if s != src]
         if len(vals) < 30:
+            self._stats_cache = None
             return None
         med = statistics.median(vals)
         mad = statistics.median(abs(v - med) for v in vals)
-        return statistics.fmean(vals), mad, len(vals)
+        stats = (statistics.fmean(vals), mad, len(vals))
+        self._stats_cache = (src, stats, self._n)
+        return stats
 
     @property
     def population_median(self) -> float:
@@ -118,11 +137,16 @@ class BaselineEngine:
     @property
     def population_mad(self) -> float:
         """Median absolute deviation of the window (robust spread)."""
+        if (self._mad_cache is not None
+                and self._n - self._mad_cache[1] < self._recompute_every):
+            return self._mad_cache[0]
         if not self._window:
             return 0.0
         masses = [m for m, _ in self._window]
         med = statistics.median(masses)
-        return statistics.median(abs(v - med) for v in masses)
+        mad = statistics.median(abs(v - med) for v in masses)
+        self._mad_cache = (mad, self._n)
+        return mad
 
     def dynamic_threshold(self) -> float | None:
         """mean + k*std once warmed up, else None (not yet trustworthy)."""
