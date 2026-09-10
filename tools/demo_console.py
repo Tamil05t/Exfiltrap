@@ -152,10 +152,12 @@ INTENSITY = {
 SCENARIOS: list[dict] = []
 
 
-def scenario(key, title, story, expect):
+def scenario(key, title, story, expect, quiet=False):
+    """``quiet=True`` marks a control scenario where zero alerts is the
+    PASS result (attack scenarios get an explicit ❌ instead)."""
     def deco(fn):
         SCENARIOS.append(dict(key=key, title=title, story=story,
-                              expect=expect, run=fn))
+                              expect=expect, run=fn, quiet=quiet))
         return fn
     return deco
 
@@ -166,7 +168,7 @@ def scenario(key, title, story, expect):
           "flagged + CONFIRMED with decoded payloads (dashboard → Alerts ▸ "
           "CONFIRMED)")
 def smash_grab(s, rng, it, tunnel):
-    cfg = {"low": (12, 3.0), "medium": (25, 5.0), "high": (40, 8.0)}[it]
+    cfg = {"low": (16, 3.0), "medium": (25, 5.0), "high": (40, 8.0)}[it]
     n, qps = cfg
     names = [b32_qname(b"QUARTERLY-RESULTS-XLSX " + bytes([i]) * 2,
                        tunnel) for i in range(n)]
@@ -262,7 +264,7 @@ def phonotactic_stealth(s, rng, it, tunnel):
           "for when the attacker hides even the encoding",
           "high-entropy labels + CONFIRMED decodes via base32 layer")
 def nested_enc(s, rng, it, tunnel):
-    cfg = {"low": (10, 3.0), "medium": (18, 5.0), "high": (30, 7.0)}[it]
+    cfg = {"low": (16, 3.5), "medium": (18, 5.0), "high": (30, 7.0)}[it]
     n, qps = cfg
     key = rng.randbytes(16)
     names = []
@@ -312,7 +314,7 @@ def dns_sweep(s, rng, it, tunnel):
           "hides inside it — the realistic network, and the hardest case",
           "flagged tunnel rows among clean everyday rows in Live Queries")
 def mixed_smoke(s, rng, it, tunnel):
-    cfg = {"low": (10, 2.5, 2.0), "medium": (16, 3.0, 2.5),
+    cfg = {"low": (16, 2.5, 2.0), "medium": (16, 3.0, 2.5),
            "high": (24, 4.0, 3.0)}[it]
     n, qps, bgqps = cfg
     stop = threading.Event()
@@ -362,7 +364,7 @@ def txt_exfil(s, rng, it, tunnel):
           "30 everyday domains mixed with scary-looking but harmless names "
           "— a good engine flags little or none of it",
           "LOW risk rows in Live Queries; clean rate stays high — proves "
-          "precision, not just recall")
+          "precision, not just recall", quiet=True)
 def scary_benign(s, rng, it, tunnel):
     names = [rng.choice(EVERYDAY) for _ in range(30)] + \
             [rng.choice(SCARY) for _ in range(12)]
@@ -372,7 +374,8 @@ def scary_benign(s, rng, it, tunnel):
 
 # ------------------------------------------------------------------- running
 def print_verdict(before: dict, settle: float = 4.0,
-                  zone: str = DEFAULT_TUNNEL, since: float = 0.0):
+                  zone: str = DEFAULT_TUNNEL, since: float = 0.0,
+                  quiet: bool = False):
     time.sleep(settle)
     try:
         after = snap()
@@ -393,15 +396,28 @@ def print_verdict(before: dict, settle: float = 4.0,
             by = collections.Counter(e["risk_level"] for e in zone_ev)
             print(f"   THIS attack ({zone}): "
                   + ", ".join(f"{k} ×{v}" for k, v in sorted(by.items())))
+            if not quiet:
+                strong = sum(v for k, v in by.items()
+                             if k in ("HIGH", "CONFIRMED"))
+                if strong:
+                    print(f"   ✅ engine caught it — {strong} "
+                          f"HIGH/CONFIRMED on this zone")
+                else:
+                    print("   ⚠ engine saw the zone but did not escalate "
+                          "past LOW/MEDIUM")
             conf = [e for e in zone_ev if e["risk_level"] == "CONFIRMED"]
             for e in (conf or zone_ev)[:3]:
                 dec = (e.get("decoded_preview") or e.get("decoded")
                        or "").replace("\n", " ")[:44]
                 print(f"     {e['risk_level']:9s} {e['qname'][:44]:44s}"
                       f" {dec}")
+        elif quiet:
+            print(f"   THIS attack ({zone}): no alerts raised — control "
+                  "scenario: that is the PASS result")
         else:
-            print(f"   THIS attack ({zone}): no alerts raised — for "
-                  "quiet/control scenarios that is the PASS result")
+            print(f"   THIS attack ({zone}): ❌ NO alerts — the engine did "
+                  "not catch it (check the capture banner above; a cold "
+                  "baseline also needs ~5 min to warm up)")
     except Exception:
         pass
     print("  ─" * 22)
@@ -436,7 +452,8 @@ def run_scenario(sc: dict, intensity: str, tunnel: str, up: str) -> None:
     if before is not None:
         # beacon lives on its own dedicated zone (see scenario)
         zone = "c2beacon.example" if sc["key"] == "beacon_c2" else tunnel
-        print_verdict(before, zone=zone, since=t0)
+        print_verdict(before, zone=zone, since=t0,
+                      quiet=sc.get("quiet", False))
         if sc["key"] == "beacon_c2":
             try:
                 ss = api("/api/sessions").get("sessions", [])
@@ -499,33 +516,47 @@ MENU_ORDER = ["smash_grab", "ramp_up", "nested_enc", "slow_drip_hex",
 
 
 def menu(tunnel: str, up: str) -> None:
+    """Everything is number-driven: scenario number, then intensity number."""
     while True:
         print()
         print("╔" + "═" * 62 + "╗")
-        print("║ ExFilTrap ATTACK CONSOLE — pick what the attacker does   ║")
+        print("║   ExFilTrap ATTACK CONSOLE — enter a number              ║")
         print("╚" + "═" * 62 + "╝")
         for i, key in enumerate(MENU_ORDER, 1):
             sc = next(s for s in SCENARIOS if s["key"] == key)
-            print(f"  {i:2d}. {sc['title']:38s} [{key}]")
-        print("   S. full demo story (scripted, 5 acts — for presenting)")
-        print("   Q. quit")
+            print(f"  {i:2d}  {sc['title']}")
+        print("  12  Full demo story — 5 scripted acts (for presenting)")
+        print()
+        print("   0  quit")
         try:
-            choice = input("choice: ").strip().lower()
+            choice = input("\nchoose attack [number]: ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             return
-        if choice in ("q", "quit", "exit"):
+        if choice in ("0", "q", "quit", "exit"):
             return
-        if choice in ("s", "story"):
+        if choice == "12":
             demo_story(tunnel, up)
             continue
         if not choice.isdigit() or not 1 <= int(choice) <= len(MENU_ORDER):
-            print("  ? try a number, S, or Q")
+            print("  ? enter a number from the list (0 to quit)")
             continue
         sc = next(s for s in SCENARIOS if s["key"] == MENU_ORDER[int(choice) - 1])
-        it = input("intensity — low / medium / high [low]: ").strip().lower()
-        it = it if it in INTENSITY else "low"
+        print(f"  → {sc['title']}")
+        print("     intensity:  1) low   2) medium   3) high")
+        try:
+            ic = input("     choose intensity [number, Enter=1]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        it = {"1": "low", "2": "medium", "3": "high",
+              "": "low"}.get(ic, "low")
         run_scenario(sc, it, tunnel, up)
+        try:
+            input("\n  ⏎ Enter to return to the menu (Ctrl-C quits)… ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
 
 
 # ---------------------------------------------------------------------- main
@@ -563,6 +594,13 @@ def main(argv=None) -> int:
         up_s = info.get("uptime_s", 0)
         print(f"engine     : mode={info.get('mode')}  uptime={up_s:.0f}s  "
               f"root={info.get('is_root')}")
+        if info.get("capture_healthy") is False:
+            ifaces = info.get("capture_ifaces") or {}
+            bad = ", ".join(name for name, v in ifaces.items()
+                            if not v.get("ok")) or "unknown interface"
+            print(f"  ⚠ CAPTURE DEGRADED on {bad} — attacks crossing that "
+                  "link will NOT be detected. Restart the engine before "
+                  "demoing (desktop ▸ Start).")
         if up_s < 300:
             print("  ⚠ engine baseline is still warming (<5 min uptime); "
                   "stateful detections sharpen with a few minutes of "
