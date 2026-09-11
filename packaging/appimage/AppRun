@@ -80,17 +80,24 @@ fi
 
 # ---- start: root-owned copy at /var/lib/exfiltrap, then launch ---------
 echo "Starting the detection engine — enter your password once (pkexec)…"
+# Stage the engine AS THE MOUNTING USER first: root cannot read a user's
+# FUSE mount on many distros (Kali reported pkexec exit 3 = copy failed).
+STAGE="$(mktemp -d /tmp/exfiltrap-engine.XXXXXX)"
+trap 'rm -rf "$STAGE"' EXIT
+cp -r "$ENGINE_DIR/." "$STAGE/"
+chmod +x "$STAGE/exfiltrap"
 PK_ERR=0
-pkexec env EXFILTRAP_SRC="$ENGINE_DIR" EXFILTRAP_LOG="$LOG_FILE" bash -c '
+pkexec env EXFILTRAP_STAGE="$STAGE" EXFILTRAP_LOG="$LOG_FILE" bash -c '
     mkdir -p /var/lib/exfiltrap
     rm -rf /var/lib/exfiltrap/engine.tmp /var/lib/exfiltrap/engine
-    if ! cp -r "$EXFILTRAP_SRC" /var/lib/exfiltrap/engine.tmp; then
+    if ! cp -r "$EXFILTRAP_STAGE" /var/lib/exfiltrap/engine.tmp; then
         echo "engine copy failed" >&2; exit 3
     fi
     mv /var/lib/exfiltrap/engine.tmp /var/lib/exfiltrap/engine
     chmod +x /var/lib/exfiltrap/engine/exfiltrap
     ( setsid nohup /var/lib/exfiltrap/engine/exfiltrap service \
         >> "$EXFILTRAP_LOG" 2>&1 & )
+    rm -rf "$EXFILTRAP_STAGE"
 ' || PK_ERR=$?
 
 if [ "$PK_ERR" != 0 ]; then
