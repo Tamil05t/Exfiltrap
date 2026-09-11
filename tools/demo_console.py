@@ -288,6 +288,35 @@ def beacon_c2(s, rng, it, tunnel):
     # timing series mixes with every other scenario. 'c2beacon.example'
     # is its own base domain → pure exact-interval series.
     domain = "c2beacon.example"
+    # wire diagnostics (2026-09-10 marathon): the engine stored 2x rows
+    # per beacon query ~0.57s apart — sniff our own beacons back to see
+    # whether the duplicate is a kernel echo or a second sender.
+    import threading
+    wire = {"n": 0, "seen": []}
+    sn = None
+
+    def _wire_prn(pkt):
+        try:
+            if wire["n"] >= 400:
+                return
+            from scapy.all import DNS, UDP
+            if DNS not in pkt or UDP not in pkt or pkt[DNS].qd is None:
+                return
+            if not bytes(pkt[DNS].qd.qname).startswith(b"\x05hb"):
+                return
+            wire["seen"].append((round(float(pkt.time), 2),
+                                 pkt[DNS].id, pkt[UDP].sport))
+            wire["n"] += 1
+        except Exception:
+            pass
+
+    try:
+        from scapy.all import AsyncSniffer
+        sn = AsyncSniffer(iface="lo", filter="udp port 53", store=False,
+                          prn=_wire_prn)
+        sn.start()
+    except Exception as e:   # scapy absent / no perms — diagnostics only
+        print(f"    (wire diag unavailable: {e})")
     for i in range(n):
         s.query(f"hb{i:03d}." + domain)
         print(f"\r    beacons: {i + 1}/{n} (exact {period:.1f}s period)   ",
@@ -295,6 +324,18 @@ def beacon_c2(s, rng, it, tunnel):
         if i < n - 1:
             time.sleep(period)
     print()
+    if sn is not None:
+        time.sleep(1.5)
+        try:
+            sn.stop()
+        except Exception:
+            pass
+        seen = wire["seen"]
+        ports = sorted({sp for _, _, sp in seen})
+        txids = sorted({tid for _, tid, _ in seen})
+        print(f"    wire-diag: {len(seen)} beacon packets captured, "
+              f"{len(ports)} source ports {ports[:6]}, "
+              f"{len(txids)} distinct txids")
 
 
 @scenario("dns_sweep", "Subdomain enumeration sweep",

@@ -54,6 +54,52 @@ RX-ring quirk — lab-only note, real NICs fine).
 
 ---
 
+## 10. 10-HOUR MARATHON (2026-09-10/11) — results & two more fixes
+
+Setup: GitHub-built 1.3.2 product (deb+AppImage engines + the REAL desktop
+app with the dashboard visible on :0) plus the fixed repo build, all run
+in parallel for 10h04m — sandbox engines under continuous overlapping
+attack COMBOS (2-3 simultaneous scenarios per cycle, benign washes) and
+the user's live wlo1 engine driven with real LAN traffic the whole time.
+1263 judged rounds total.
+
+**Shipped-build degradation, measured live (the marathon's core finding):**
+- t1 (AppImage 1.3.2): catch-rate fell 85%→71% over 10h; 53 MISSes. At
+  ~33k session events the O(N²) assessment lag hit ~52s (attacks stored
+  but flagged a minute late — verdict windows missed them); by hour 7 the
+  API saturated (stats-poll amplification: ~18 stats polls/min × 1.4s).
+- t2 (host wlo1, real LAN): 91% catch, degrading the same way; /api/stats
+  latency 49→1392ms over 6h (paper claims <50ms — fails at sustained
+  scale on the shipped build). RSS stayed FLAT (~180MB) everywhere —
+  no leak, just CPU-path decay + unindexed aggregates.
+- **t3b (all fixes, fresh baseline): 239/239 attack rounds caught (100%)
+  over 4.5h of combos, 120 M3b beacon alerts, zero health incidents.**
+
+**Two more fixes shipped during the run:**
+20. **Baseline desensitization (boiling frog):** hour-5 miss rate rose
+    0→6/hr as 5h of continuous attacks trained the self-learning baseline
+    until the stateful layer stopped escalating (attacks scored MEDIUM).
+    Fix: pipeline freezes baseline learning 300s (sliding) on every
+    HIGH/CONFIRMED (session_tracker.freeze_baseline). A/B: t3b 0 misses
+    across hours 6-10 vs 12+ on the unfixed fixed-build.
+21. **API stats-poll amplification:** /api/stats polled ~18×/min by the
+    dashboard+monitors, each call 1.4s at ~100k rows (unindexed table
+    aggregates + lock) → verdict reads queued behind them. Fix: covering
+    indexes idx_queries_risk/src (27.3→5.0ms on the doughnut query) +
+    2s TTL cache on the /api/stats route. Future work: materialized
+    rolling aggregates for the timeseries.
+
+Sandbox-only artifact (parked, not a product bug): in the shared test
+netns each beacon query appeared twice on the wire ~0.5-2.5s apart
+(host path verified clean via single-send nonce test — exactly 1 row).
+Console beacon_c2 carries a temporary wire-diag sniffer for this.
+
+Judged-round caveats: control scenarios inside COMBOS can't be attributed
+cleanly (concurrent attacks share the zone) → NO_VERDICT; they are not
+detection failures. /tmp/soak-exfiltrap/* holds all raw logs/DBs.
+
+---
+
 ## 1. WHAT THE PROJECT IS
 
 Detection engine + product for DNS tunneling / slow-drip data exfiltration.
