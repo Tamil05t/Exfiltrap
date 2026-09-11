@@ -1,19 +1,8 @@
 #!/bin/bash
-# ExFilTrap AppImage launcher — browser-dashboard edition.
+# ExFilTrap AppImage launcher v2 — browser dashboard, visible failures.
 #
-# The old AppImage bundled WebKit/GTK and aborted on Kali/VMs with
-# "Could not create default EGL display: EGL_BAD_PARAMETER" — a native
-# webview can never be universal on Linux. This AppImage bundles ONLY the
-# detection engine; the dashboard is the browser (every distro has one):
-#
-#   1. engine already running?  -> just open the dashboard
-#   2. otherwise start it via ONE pkexec password prompt (root-owned copy
-#      at /var/lib/exfiltrap, then the engine runs from there)
-#   3. open http://127.0.0.1:5050 in the default browser
-#
-# Flags:
-#   --stop    stop the running engine (pkexec pkill)
-#   --help    this text
+# Everything is logged to /tmp/exfiltrap-appimage.log AND, on any failure,
+# shown in a GUI dialog — a double-click must never fail silently.
 
 set -u
 
@@ -22,42 +11,64 @@ ENGINE_DIR="$HERE/usr/lib/exfiltrap-engine"
 ENGINE_BIN="$ENGINE_DIR/exfiltrap"
 DASH_URL="http://127.0.0.1:5050"
 LOG_FILE="/tmp/exfiltrap-service.log"
+APP_LOG="/tmp/exfiltrap-appimage.log"
 DEPLOY_DIR="/var/lib/exfiltrap/engine"
 VERSION_TAG="$(cat "$HERE/usr/share/exfiltrap/version" 2>/dev/null || echo "dev")"
-echo "ExFilTrap $VERSION_TAG (browser-dashboard edition — no WebKit/EGL)"
+
+mkdir -p /tmp
+echo "=== ExFilTrap $VERSION_TAG (browser edition) $(date) ===" >> "$APP_LOG"
+exec > >(tee -a "$APP_LOG") 2>&1
 
 engine_reachable() {
     timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/5050' 2>/dev/null
 }
 
+show_error() {   # GUI dialog first, always mirrored to the app log
+    local msg="$1"
+    echo "ERROR: $msg"
+    if command -v zenity >/dev/null 2>&1; then
+        zenity --error --title="ExFilTrap" --width=520 --text="$msg" \
+            >/dev/null 2>&1 || true
+    elif command -v kdialog >/dev/null 2>&1; then
+        kdialog --error "$msg" >/dev/null 2>&1 || true
+    elif command -v notify-send >/dev/null 2>&1; then
+        notify-send -u critical "ExFilTrap" "$msg" 2>/dev/null || true
+    fi
+    if [ -t 0 ]; then
+        read -r -p "Press Enter to close…" _
+    fi
+}
+
 open_dashboard() {
-    if engine_reachable; then
-        ( sleep 1; xdg-open "$DASH_URL" >/dev/null 2>&1 \
-            || sensible-browser "$DASH_URL" >/dev/null 2>&1 \
-            || firefox "$DASH_URL" >/dev/null 2>&1 \
-            || echo "Open $DASH_URL in your browser." ) &
-        disown
-        echo "Dashboard: $DASH_URL"
-    else
-        echo "Engine is not reachable — dashboard not opened."
+    ( sleep 1
+      xdg-open "$DASH_URL" >/dev/null 2>&1 \
+          || sensible-browser "$DASH_URL" >/dev/null 2>&1 \
+          || firefox "$DASH_URL" >/dev/null 2>&1 \
+          || echo "Open $DASH_URL in your browser." ) &
+    disown
+    echo "Dashboard: $DASH_URL"
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send "ExFilTrap" "Engine is live — dashboard opened in your browser." 2>/dev/null || true
     fi
 }
 
 case "${1:-}" in
     --help|-h)
-        echo "ExFilTrap — DNS tunneling & slow-drip exfiltration detector"
+        echo "ExFilTrap $VERSION_TAG — DNS tunneling & slow-drip detector"
         echo "Usage: ExFilTrap.AppImage [--stop]"
         echo "  (no flags)  start the engine (one pkexec prompt) and open"
         echo "              the dashboard in your default browser"
         echo "  --stop      stop the running engine"
+        echo "Full log: $APP_LOG and $LOG_FILE"
         exit 0 ;;
     --stop)
-        pkexec pkill -x exfiltrap && echo "engine stopped" || echo "stop cancelled/failed"
+        pkexec pkill -x exfiltrap && echo "engine stopped" \
+            || show_error "Stop cancelled or failed."
         exit 0 ;;
 esac
 
 if [ ! -x "$ENGINE_BIN" ]; then
-    echo "ERROR: bundled engine missing at $ENGINE_BIN" >&2
+    show_error "Bundled engine missing at $ENGINE_BIN — the download is incomplete or corrupted. Re-download the artifact."
     exit 1
 fi
 
@@ -67,33 +78,51 @@ if engine_reachable; then
     exit 0
 fi
 
-# Start: root-owned copy at /var/lib/exfiltrap (the engine must not run
-# from a user-writable path with root privileges).
+# ---- start: root-owned copy at /var/lib/exfiltrap, then launch ---------
 echo "Starting the detection engine — enter your password once (pkexec)…"
-if ! pkexec env EXFILTRAP_SRC="$ENGINE_DIR" bash -c '
+PK_ERR=0
+pkexec env EXFILTRAP_SRC="$ENGINE_DIR" EXFILTRAP_LOG="$LOG_FILE" bash -c '
     mkdir -p /var/lib/exfiltrap
     rm -rf /var/lib/exfiltrap/engine.tmp /var/lib/exfiltrap/engine
-    cp -r "$EXFILTRAP_SRC" /var/lib/exfiltrap/engine.tmp
+    if ! cp -r "$EXFILTRAP_SRC" /var/lib/exfiltrap/engine.tmp; then
+        echo "engine copy failed" >&2; exit 3
+    fi
     mv /var/lib/exfiltrap/engine.tmp /var/lib/exfiltrap/engine
     chmod +x /var/lib/exfiltrap/engine/exfiltrap
     ( setsid nohup /var/lib/exfiltrap/engine/exfiltrap service \
-        >> /tmp/exfiltrap-service.log 2>&1 & )
-'; then
-    echo "Start cancelled or pkexec unavailable." >&2
-    echo "Run it manually with:  sudo $ENGINE_BIN service" >&2
-    echo "Then reopen this AppImage to get the dashboard." >&2
+        >> "$EXFILTRAP_LOG" 2>&1 & )
+' || PK_ERR=$?
+
+if [ "$PK_ERR" != 0 ]; then
+    show_error "Engine start was cancelled or failed (pkexec exit $PK_ERR).
+
+If you entered your password and this still appeared, run in a terminal:
+  $ENGINE_BIN service
+and send the output — the engine itself rejected this system."
     exit 1
 fi
 
-# Wait for the API (model load takes a few seconds).
+# ---- wait for the API ---------------------------------------------------
+echo "Waiting for the engine API…"
+UP=0
 for _ in $(seq 1 40); do
-    engine_reachable && break
+    if engine_reachable; then UP=1; break; fi
     sleep 1
 done
 
-if ! engine_reachable; then
-    echo "Engine failed to start — last log lines:" >&2
-    tail -5 "$LOG_FILE" >&2 2>/dev/null
+if [ "$UP" != 1 ]; then
+    TAIL="$(tail -12 "$LOG_FILE" 2>/dev/null || echo '(engine log missing)')"
+    {
+        echo "ERROR: the engine did not come up within 40 s."
+        echo "--- engine log tail ($LOG_FILE) ---"
+        echo "$TAIL"
+    } > /tmp/exfiltrap-last-error.txt
+    show_error "The engine did not start. The exact error is saved in
+/tmp/exfiltrap-last-error.txt
+
+Most common cause: this distro's libraries differ from the build host.
+Send that file's contents to get it fixed — the error names the exact
+missing library or path."
     exit 1
 fi
 
