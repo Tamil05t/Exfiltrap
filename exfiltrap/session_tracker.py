@@ -98,6 +98,12 @@ class SessionTracker:
         # isolates the tunnel: one base domain receiving many high-entropy
         # labels at machine-regular intervals.
         self._domain_times: dict[tuple[str, str], deque[float]] = {}
+        # Anti-desensitization: a sustained attack diet trains the
+        # self-learning baseline toward attack traffic (live marathon
+        # 2026-09-11: after 5 h of continuous attacks the stateful layer
+        # stopped escalating — hour-5 miss rate 6x hour-0). While frozen,
+        # the baseline ignores new observations so attacks cannot teach it.
+        self._baseline_frozen_until = 0.0
         # Capture, API and maintenance threads all touch the deques; the
         # stress test caught a live "deque mutated during iteration" race
         # between them, so every access is serialized.
@@ -108,6 +114,24 @@ class SessionTracker:
         """Entropy-weighted byte mass of a single query."""
         weight = min(max(entropy / config.MAX_LABEL_ENTROPY, 0.0), 1.0)
         return estimated_bytes * weight
+
+    def freeze_baseline(self, seconds: float = 300.0) -> None:
+        """Pause baseline learning (attack-traffic freeze).
+
+        Called by the pipeline when assessments flag HIGH/CONFIRMED: the
+        attacker's own traffic must not shift the reference the next
+        detection depends on. The freeze holds for ``seconds`` after the
+        most recent alert and slides forward with every new one.
+        """
+        import time as _time
+
+        self._baseline_frozen_until = max(self._baseline_frozen_until,
+                                          _time.monotonic() + seconds)
+
+    def _baseline_learning_active(self) -> bool:
+        import time as _time
+
+        return _time.monotonic() >= self._baseline_frozen_until
 
     def update(
         self, src_ip: str, timestamp: float, estimated_bytes: float, entropy: float,
@@ -129,7 +153,7 @@ class SessionTracker:
         self._cum[src_ip] = self._cum.get(src_ip, 0.0) - popped + mass
         dq.append((timestamp, mass))
 
-        if self.baseline is not None:
+        if self.baseline is not None and self._baseline_learning_active():
             self.baseline.update(mass, src_ip)
 
         # M3c domain-level signals (velocity + per-domain beacon timing).

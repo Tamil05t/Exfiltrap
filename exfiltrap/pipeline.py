@@ -143,6 +143,13 @@ class ExfilTrapPipeline:
             self.storage.log_risk_event(assessment)
             if self.alerter is not None:
                 self.alerter.send(assessment)
+            # The attacker's traffic must not teach the baseline: freeze
+            # learning while alerts fire (anti-desensitization — a live
+            # 10h run showed the stateful layer going quiet after 5h of
+            # continuous attacks as the baseline normalized them).
+            freeze = getattr(self.tracker, "freeze_baseline", None)
+            if freeze is not None:
+                freeze(300.0)
             # A mitigation failure (safety refusal, missing binary, hung
             # subprocess) must NEVER take down the detection loop: log it
             # and keep detecting.
