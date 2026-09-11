@@ -34,6 +34,8 @@ cp "$HERE/ex-fil-trap.desktop" \
    "$WORK/AppDir/usr/share/applications/ex-fil-trap.desktop"
 cp "$ICON" "$WORK/AppDir/ex-fil-trap.png"
 cp "$ICON" "$WORK/AppDir/usr/share/icons/hicolor/256x256/apps/ex-fil-trap.png"
+mkdir -p "$WORK/AppDir/usr/share/exfiltrap"
+echo "$VERSION" > "$WORK/AppDir/usr/share/exfiltrap/version"
 sed -i "s/^X-AppImage-Version=.*/X-AppImage-Version=$VERSION/" \
     "$WORK/AppDir/ex-fil-trap.desktop" \
     "$WORK/AppDir/usr/share/applications/ex-fil-trap.desktop"

@@ -23,6 +23,8 @@ ENGINE_BIN="$ENGINE_DIR/exfiltrap"
 DASH_URL="http://127.0.0.1:5050"
 LOG_FILE="/tmp/exfiltrap-service.log"
 DEPLOY_DIR="/var/lib/exfiltrap/engine"
+VERSION_TAG="$(cat "$HERE/usr/share/exfiltrap/version" 2>/dev/null || echo "dev")"
+echo "ExFilTrap $VERSION_TAG (browser-dashboard edition — no WebKit/EGL)"
 
 engine_reachable() {
     timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/5050' 2>/dev/null
