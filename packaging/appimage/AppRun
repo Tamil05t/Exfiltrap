@@ -1,0 +1,99 @@
+#!/bin/bash
+# ExFilTrap AppImage launcher — browser-dashboard edition.
+#
+# The old AppImage bundled WebKit/GTK and aborted on Kali/VMs with
+# "Could not create default EGL display: EGL_BAD_PARAMETER" — a native
+# webview can never be universal on Linux. This AppImage bundles ONLY the
+# detection engine; the dashboard is the browser (every distro has one):
+#
+#   1. engine already running?  -> just open the dashboard
+#   2. otherwise start it via ONE pkexec password prompt (root-owned copy
+#      at /var/lib/exfiltrap, then the engine runs from there)
+#   3. open http://127.0.0.1:5050 in the default browser
+#
+# Flags:
+#   --stop    stop the running engine (pkexec pkill)
+#   --help    this text
+
+set -u
+
+HERE="$(readlink -f "$(dirname "$0")")"
+ENGINE_DIR="$HERE/usr/lib/exfiltrap-engine"
+ENGINE_BIN="$ENGINE_DIR/exfiltrap"
+DASH_URL="http://127.0.0.1:5050"
+LOG_FILE="/tmp/exfiltrap-service.log"
+DEPLOY_DIR="/var/lib/exfiltrap/engine"
+
+engine_reachable() {
+    timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/5050' 2>/dev/null
+}
+
+open_dashboard() {
+    if engine_reachable; then
+        ( sleep 1; xdg-open "$DASH_URL" >/dev/null 2>&1 \
+            || sensible-browser "$DASH_URL" >/dev/null 2>&1 \
+            || firefox "$DASH_URL" >/dev/null 2>&1 \
+            || echo "Open $DASH_URL in your browser." ) &
+        disown
+        echo "Dashboard: $DASH_URL"
+    else
+        echo "Engine is not reachable — dashboard not opened."
+    fi
+}
+
+case "${1:-}" in
+    --help|-h)
+        echo "ExFilTrap — DNS tunneling & slow-drip exfiltration detector"
+        echo "Usage: ExFilTrap.AppImage [--stop]"
+        echo "  (no flags)  start the engine (one pkexec prompt) and open"
+        echo "              the dashboard in your default browser"
+        echo "  --stop      stop the running engine"
+        exit 0 ;;
+    --stop)
+        pkexec pkill -x exfiltrap && echo "engine stopped" || echo "stop cancelled/failed"
+        exit 0 ;;
+esac
+
+if [ ! -x "$ENGINE_BIN" ]; then
+    echo "ERROR: bundled engine missing at $ENGINE_BIN" >&2
+    exit 1
+fi
+
+if engine_reachable; then
+    echo "Engine already running."
+    open_dashboard
+    exit 0
+fi
+
+# Start: root-owned copy at /var/lib/exfiltrap (the engine must not run
+# from a user-writable path with root privileges).
+echo "Starting the detection engine — enter your password once (pkexec)…"
+if ! pkexec env EXFILTRAP_SRC="$ENGINE_DIR" bash -c '
+    mkdir -p /var/lib/exfiltrap
+    rm -rf /var/lib/exfiltrap/engine.tmp /var/lib/exfiltrap/engine
+    cp -r "$EXFILTRAP_SRC" /var/lib/exfiltrap/engine.tmp
+    mv /var/lib/exfiltrap/engine.tmp /var/lib/exfiltrap/engine
+    chmod +x /var/lib/exfiltrap/engine/exfiltrap
+    ( setsid nohup /var/lib/exfiltrap/engine/exfiltrap service \
+        >> /tmp/exfiltrap-service.log 2>&1 & )
+'; then
+    echo "Start cancelled or pkexec unavailable." >&2
+    echo "Run it manually with:  sudo $ENGINE_BIN service" >&2
+    echo "Then reopen this AppImage to get the dashboard." >&2
+    exit 1
+fi
+
+# Wait for the API (model load takes a few seconds).
+for _ in $(seq 1 40); do
+    engine_reachable && break
+    sleep 1
+done
+
+if ! engine_reachable; then
+    echo "Engine failed to start — last log lines:" >&2
+    tail -5 "$LOG_FILE" >&2 2>/dev/null
+    exit 1
+fi
+
+echo "Engine is live."
+open_dashboard

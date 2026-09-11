@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ExFilTrap
+GenericName=DNS Exfiltration Detector
+Comment=Detect and mitigate DNS tunneling & slow-drip data exfiltration
+Exec=ex-fil-trap
+Icon=ex-fil-trap
+Terminal=false
+Categories=Network;Security;Monitor;
+StartupNotify=true
+X-AppImage-Version=1.3.3
