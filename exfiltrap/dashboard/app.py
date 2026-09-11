@@ -7,6 +7,7 @@ Reads the SQLite database written by the pipeline. Run with:
 from __future__ import annotations
 
 import argparse
+import time
 
 from flask import Flask, jsonify, render_template
 
@@ -40,14 +41,26 @@ def create_app(db_path=None, status_provider=None, sessions_provider=None,
 
     @app.route("/api/stats")
     def stats():
+        # The dashboard polls this route every few seconds and each call
+        # aggregates the whole queries table (measured 1.4 s at ~100k rows
+        # on the shipped build) — under several pollers that alone
+        # saturates the API and verdict reads start timing out. A 2 s TTL
+        # cache collapses concurrent/rapid polls onto one computation.
         storage: Storage = app.config["STORAGE"]
-        return jsonify(
+        now = time.monotonic()
+        cache = app.config.setdefault("_STATS_CACHE", {})
+        hit = cache.get("v")
+        if hit is not None and now - hit[0] < 2.0:
+            return jsonify(hit[1])
+        body = dict(
             totals=storage.totals(),
             levels=storage.risk_distribution(),
             response_flags=storage.response_flag_count(),
             timeseries=storage.timeseries(bucket_seconds=60, limit=120),
             top_sources=storage.top_sources(8),
         )
+        cache["v"] = (now, body)
+        return jsonify(body)
 
     @app.route("/api/status")
     def status():
