@@ -38,6 +38,14 @@ class PolicyMitigation:
             self._expires[ip] = self.clock() + self.block_ttl
         return blocked
 
+    def allowlist_add(self, ip: str) -> None:
+        """Live addition (dashboard/persistent allowlist) — O(1) set op."""
+        if ip:
+            self.allowlist.add(ip)
+
+    def allowlist_remove(self, ip: str) -> None:
+        self.allowlist.discard(ip)
+
     def unblock(self, ip: str) -> bool:
         """Manual reversal (dashboard button); idempotent."""
         self._expires.pop(ip, None)

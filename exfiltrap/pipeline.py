@@ -20,6 +20,7 @@ import logging
 import queue
 import threading
 import time
+from dataclasses import replace as _dc_replace
 from typing import Iterable
 
 from exfiltrap import config
@@ -58,6 +59,10 @@ class ExfilTrapPipeline:
         )
         self.mitigation = mitigation if mitigation is not None else LogOnlyMitigation()
         self.storage = storage if storage is not None else NullStorage()
+        # Operator-muted domains: matching queries are stored but capped at
+        # LOW — own-host telemetry endpoints (OTLP/log exporters) that any
+        # tunnel detector flags but the operator has vouched for.
+        self._muted: set[str] = set()
         self.extractor = extractor if extractor is not None else FeatureExtractor()
         self.baseline = baseline if baseline is not None else BaselineEngine()
         self.tracker = (
@@ -115,6 +120,16 @@ class ExfilTrapPipeline:
         return [self._decide(q, v, p)
                 for q, v, p in zip(events, vectors, probs)]
 
+    def set_muted_domains(self, domains: Iterable[str]) -> None:
+        """Replace the muted-domain set (service loads it at start and on
+        dashboard changes; matching queries are stored but capped at LOW).
+        A plain attribute rebind — atomic under the GIL, read per query."""
+        self._muted = {d.lower().strip() for d in domains if d.strip()}
+
+    def _is_muted(self, qname: str) -> bool:
+        q = qname.lower()
+        return any(q == d or q.endswith("." + d) for d in self._muted)
+
     def _decide(self, q: DNSQuery, features, prob: float) -> RiskAssessment:
         """Stateful decision chain given precomputed features + probability."""
         self._index += 1
@@ -137,6 +152,13 @@ class ExfilTrapPipeline:
             query_index=self._index,
             beacon_candidate=state.beacon_candidate,
         )
+        if self._is_muted(q.qname) and assessment.risk_level != "LOW":
+            # Operator-muted domain (own-host telemetry etc.): keep the
+            # row for transparency, cap the verdict, never alert/block.
+            assessment = _dc_replace(
+                assessment, risk_level="LOW", confirmed_exfiltration=False,
+                decoded_preview=None,
+                reasons=[f"muted domain (operator): {assessment.risk_level} suppressed"])
 
         self.storage.log_query(assessment)
         if assessment.risk_level in ("HIGH", "CONFIRMED"):

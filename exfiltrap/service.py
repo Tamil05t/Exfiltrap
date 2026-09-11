@@ -408,6 +408,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="seconds before a block auto-unbans (0=never)")
     parser.add_argument("--allowlist", default="",
                         help="comma-separated IPs never blocked")
+    parser.add_argument("--mute-domain", default="",
+                        help="comma-separated domains whose queries are "
+                             "stored but capped at LOW (own-host telemetry)")
     parser.add_argument("--alert", choices=("none", "syslog"), default=None,
                         help="SIEM alerting for HIGH/CONFIRMED detections")
     parser.add_argument("--verbose", "-v", action="store_true")
@@ -499,9 +502,15 @@ def main(argv: list[str] | None = None) -> int:
     alerter = make_alerter(args.alert)
     from exfiltrap.policy import make_policy
 
+    # Persistent allowlist/mute: CLI seeds merge into the DB (idempotent)
+    # so operator decisions survive restarts; the DB is the source of truth.
+    for ip in [ip for ip in args.allowlist.split(",") if ip]:
+        storage.allowlist_add(ip, note="cli --allowlist")
+    for dom in [d for d in args.mute_domain.split(",") if d]:
+        storage.muted_add(dom, note="cli --mute-domain")
     mitigation = make_policy(
         mitigation,
-        allowlist=[ip for ip in args.allowlist.split(",") if ip],
+        allowlist=[a["ip"] for a in storage.allowlist_list()],
         block_ttl=args.block_ttl or 1e18,
     )
     pipeline = ExfilTrapPipeline(
@@ -510,6 +519,7 @@ def main(argv: list[str] | None = None) -> int:
         storage=storage,
         alerter=alerter,
     )
+    pipeline.set_muted_domains([m["domain"] for m in storage.muted_list()])
     # Warm restart: restore tracker/baseline state saved next to the DB.
     state_path = (args.db or "exfiltrap.db") + ".state.json"
     if args.iface and st_mod.load_state(pipeline.tracker, state_path):
@@ -593,9 +603,49 @@ def main(argv: list[str] | None = None) -> int:
         # The blocked-list UI reads this table; it is the source of truth.
         return storage.remove_block(ip) or ok
 
+    # Persistent allowlist/mute: writes go to the DB (source of truth) AND
+    # the live policy/pipeline state, so changes apply without a restart.
+    def _allowlist_add(payload: dict) -> bool:
+        p = payload or {}
+        ip = (p.get("ip") or "").strip()
+        if not ip:
+            return False
+        storage.allowlist_add(ip, note=p.get("note", "dashboard"))
+        getattr(mitigation, "allowlist_add", lambda _: None)(ip)
+        log.info("allowlist: %s added (persistent)", ip)
+        return True
+
+    def _allowlist_remove(payload: dict) -> bool:
+        ip = (payload or {}).get("ip", "")
+        getattr(mitigation, "allowlist_remove", lambda _: None)(ip)
+        return storage.allowlist_remove(ip)
+
+    def _mute_add(payload: dict) -> bool:
+        p = payload or {}
+        dom = (p.get("domain") or "").strip().lower()
+        if not dom:
+            return False
+        storage.muted_add(dom, note=p.get("note", "dashboard"))
+        muted = set(getattr(pipeline, "_muted", set())) | {dom}
+        pipeline.set_muted_domains(muted)
+        log.info("muted domain: %s added (persistent)", dom)
+        return True
+
+    def _mute_remove(payload: dict) -> bool:
+        dom = (payload or {}).get("domain", "")
+        muted = set(getattr(pipeline, "_muted", set())) - {dom.lower()}
+        pipeline.set_muted_domains(muted)
+        return storage.muted_remove(dom)
+
     app = create_app(args.db, status_provider=runtime.status,
                      sessions_provider=_sessions_snapshot,
-                     unblock_provider=_unblock)
+                     unblock_provider=_unblock,
+                     allowlist_provider={"list": storage.allowlist_list,
+                                         "add": _allowlist_add,
+                                         "remove": _allowlist_remove},
+                     mute_provider={"list": storage.muted_list,
+                                    "add": _mute_add,
+                                    "remove": _mute_remove})
     log.info("API + dashboard on http://%s:%d (Ctrl+C to stop)",
              args.api_host, args.api_port)
     try:

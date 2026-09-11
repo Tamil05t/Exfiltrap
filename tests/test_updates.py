@@ -86,6 +86,117 @@ class TestAlerting:
         assert sent == ["CONFIRMED"]
 
 
+class TestPersistentPolicy:
+    """Allowlist + muted domains that survive restarts (marathon finding:
+    operator decisions were lost on every engine restart)."""
+
+    def test_storage_allowlist_crud_and_persistence(self, tmp_path):
+        from exfiltrap.storage import Storage
+
+        db = tmp_path / "p.db"
+        s = Storage(db)
+        s.allowlist_add("10.0.0.9", "own telemetry")
+        s.allowlist_add("10.0.0.9", "updated note")   # idempotent upsert
+        s.allowlist_add("10.0.0.10")
+        assert [a["ip"] for a in s.allowlist_list()] == ["10.0.0.9", "10.0.0.10"]
+        assert s.allowlist_list()[0]["note"] == "updated note"
+        s.close()
+        s2 = Storage(db)                               # persists across restart
+        assert [a["ip"] for a in s2.allowlist_list()] == ["10.0.0.9", "10.0.0.10"]
+        assert s2.allowlist_remove("10.0.0.9") is True
+        assert s2.allowlist_remove("10.0.0.9") is False
+        s2.close()
+
+    def test_storage_muted_domains_crud(self, tmp_path):
+        from exfiltrap.storage import Storage
+
+        s = Storage(tmp_path / "m.db")
+        s.muted_add("LOG.aliyuncs.com")               # normalized to lower
+        assert s.muted_list()[0]["domain"] == "log.aliyuncs.com"
+        s.muted_add("log.aliyuncs.com")               # same key, no dup
+        assert len(s.muted_list()) == 1
+        assert s.muted_remove("log.aliyuncs.com") is True
+        assert s.muted_list() == []
+        s.close()
+
+    def test_policy_allowlist_is_live_editable(self):
+        from exfiltrap.mitigation import LogOnlyMitigation
+        from exfiltrap.policy import make_policy
+
+        pol = make_policy(LogOnlyMitigation(), allowlist=["10.0.0.1"])
+        assert pol.block_ip("10.0.0.1") is False
+        pol.allowlist_add("10.0.0.2")                 # live, no restart
+        assert pol.block_ip("10.0.0.2") is False
+        assert pol.block_ip("10.0.0.3") is True
+        pol.allowlist_remove("10.0.0.2")
+
+    def test_pipeline_caps_muted_domains(self):
+        import base64
+        from exfiltrap.pipeline import ExfilTrapPipeline
+        from exfiltrap.storage import NullStorage
+        from exfiltrap.events import DNSQuery
+
+        class Stub:
+            def predict_proba(self, f):
+                return 0.95 if f.entropy > 4.0 else 0.02
+
+        p = ExfilTrapPipeline(classifier=Stub(), storage=NullStorage())
+        p.set_muted_domains(["telemetry.example"])
+        label = base64.b32encode(b"loud tunnel payload!").decode().rstrip("=")
+        loud = f"{label}.telemetry.example"
+        assert p._is_muted(loud) and not p._is_muted(loud + ".x")
+        a = p.process_query(DNSQuery("10.99.0.9", loud, 1.0))
+        assert a.risk_level == "LOW", "muted domain must be capped"
+        assert any("muted" in r for r in a.reasons)
+
+    def test_allowlist_and_mute_endpoints(self, tmp_path):
+        from exfiltrap.dashboard.app import create_app
+        from exfiltrap.storage import Storage
+
+        store = Storage(tmp_path / "pol.db")
+        calls = {"add": []}
+        app = create_app(
+            tmp_path / "pol.db",
+            allowlist_provider={
+                "list": store.allowlist_list,
+                "add": lambda p: (calls["add"].append(p["ip"]),
+                                  store.allowlist_add(p["ip"])) and True,
+                "remove": lambda p: store.allowlist_remove(p["ip"]),
+            },
+            mute_provider={"list": store.muted_list,
+                           "add": lambda p: store.muted_add(p["domain"]),
+                           "remove": lambda p: store.muted_remove(p["domain"])},
+        )
+        c = app.test_client()
+        assert c.get("/api/allowlist").json["allowlist"] == []
+        assert c.post("/api/allowlist", json={"ip": "10.0.0.9"}).json["ok"]
+        assert calls["add"] == ["10.0.0.9"]           # live state updated
+        assert c.get("/api/allowlist").json["allowlist"][0]["ip"] == "10.0.0.9"
+        assert c.delete("/api/allowlist", json={"ip": "10.0.0.9"}).json["ok"]
+        assert c.get("/api/allowlist").json["allowlist"] == []
+        assert c.post("/api/mute", json={"domain": "Log.Aliyuncs.com"}).json["ok"]
+        assert c.get("/api/mute").json["muted"][0]["domain"] == "log.aliyuncs.com"
+        assert c.delete("/api/mute", json={"domain": "log.aliyuncs.com"}).json["ok"]
+        # standalone (no providers): falls back to direct DB writes
+        c2 = create_app(tmp_path / "pol.db").test_client()
+        assert c2.post("/api/mute", json={"domain": "telemetry.example"}).json["ok"]
+        assert c2.get("/api/mute").json["muted"][0]["domain"] == "telemetry.example"
+        store.close()
+
+    def test_cli_seeds_persist_in_db(self, tmp_path):
+        # --allowlist/--mute-domain seed the persistent tables; the next
+        # start reads them back without flags (survives restarts).
+        from exfiltrap.storage import Storage
+
+        s = Storage(tmp_path / "s.db")
+        for ip in ["10.0.0.1", "10.0.0.2"]:
+            s.allowlist_add(ip, note="cli --allowlist")
+        s.muted_add("log.aliyuncs.com", note="cli --mute-domain")
+        assert {a["ip"] for a in s.allowlist_list()} == {"10.0.0.1", "10.0.0.2"}
+        assert s.muted_list()[0]["domain"] == "log.aliyuncs.com"
+        s.close()
+
+
 class TestWatchdog:
     def _notify_socket(self, tmp_path):
         sock_path = str(tmp_path / "notify.sock")

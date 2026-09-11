@@ -223,6 +223,24 @@
           <tbody></tbody>
         </table>
       </div>
+      <div class="panel" style="margin-top:.8rem">
+        <b>Persistent allowlist</b>
+        <span class="muted" style="font-size:.8rem">— these IPs are never blocked; list survives engine restarts</span>
+        <div style="display:flex;gap:.4rem;margin:.5rem 0">
+          <input id="al-ip" placeholder="IP, e.g. 10.0.0.9" style="flex:1">
+          <button id="al-add">allow</button>
+        </div>
+        <div id="al-list" class="mono" style="font-size:.8rem"></div>
+      </div>
+      <div class="panel" style="margin-top:.8rem">
+        <b>Muted domains</b>
+        <span class="muted" style="font-size:.8rem">— matching queries are stored but capped at LOW and never blocked (own-host telemetry endpoints, e.g. OTLP/log exporters). Survives restarts.</span>
+        <div style="display:flex;gap:.4rem;margin:.5rem 0">
+          <input id="mu-domain" placeholder="domain, e.g. log.aliyuncs.com" style="flex:1">
+          <button id="mu-add">mute</button>
+        </div>
+        <div id="mu-list" class="mono" style="font-size:.8rem"></div>
+      </div>
     </section>
   </main>
 
@@ -432,7 +450,48 @@
        <td><span class="risk risk-${x.risk_level}">${x.risk_level}</span></td>
        <td><button onclick="unblock('${esc(x.src_ip)}')" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:.15rem .5rem;cursor:pointer;font-size:.7rem">unblock</button></td></tr>`).join("") ||
        '<tr><td colspan="4" class="muted">none</td></tr>';
+     const al = await jget("/api/allowlist");
+     if (al) $("al-list").innerHTML = al.allowlist.map((x) =>
+       `<div>${esc(x.ip)} <button onclick="delAllowlist('${esc(x.ip)}')" class="muted" style="cursor:pointer;background:none;border:none;color:#8b98a5">✕</button></div>`).join("") ||
+       '<span class="muted">empty</span>';
+     const mu = await jget("/api/mute");
+     if (mu) $("mu-list").innerHTML = mu.muted.map((x) =>
+       `<div>${esc(x.domain)} <button onclick="delMute('${esc(x.domain)}')" class="muted" style="cursor:pointer;background:none;border:none;color:#8b98a5">✕</button></div>`).join("") ||
+       '<span class="muted">empty</span>';
    }
+
+   async function addAllowlist() {
+     const ip = $("al-ip").value.trim();
+     if (!ip) return;
+     const r = await fetch("/api/allowlist", { method: "POST",
+       headers: {"Content-Type": "application/json"},
+       body: JSON.stringify({ ip }) });
+     if (r.ok) { $("al-ip").value = ""; loadBlocked(); }
+   }
+   async function delAllowlist(ip) {
+     await fetch("/api/allowlist", { method: "DELETE",
+       headers: {"Content-Type": "application/json"},
+       body: JSON.stringify({ ip }) });
+     loadBlocked();
+   }
+   async function addMute() {
+     const domain = $("mu-domain").value.trim().toLowerCase();
+     if (!domain) return;
+     const r = await fetch("/api/mute", { method: "POST",
+       headers: {"Content-Type": "application/json"},
+       body: JSON.stringify({ domain }) });
+     if (r.ok) { $("mu-domain").value = ""; loadBlocked(); }
+   }
+   async function delMute(domain) {
+     await fetch("/api/mute", { method: "DELETE",
+       headers: {"Content-Type": "application/json"},
+       body: JSON.stringify({ domain }) });
+     loadBlocked();
+   }
+   $("al-add").onclick = addAllowlist;
+   $("mu-add").onclick = addMute;
+   $("al-ip").onkeydown = (e) => { if (e.key === "Enter") addAllowlist(); };
+   $("mu-domain").onkeydown = (e) => { if (e.key === "Enter") addMute(); };
 
    function chartOpts() {
      return { animation: false, interaction: { mode: "index", intersect: false },

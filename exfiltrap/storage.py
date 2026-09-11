@@ -8,6 +8,7 @@ safe if the dashboard ever shares the process.
 from __future__ import annotations
 
 import sqlite3
+import time
 import threading
 
 from exfiltrap import config
@@ -41,6 +42,22 @@ CREATE TABLE IF NOT EXISTS blocked_ips (
     src_ip TEXT PRIMARY KEY,
     ts REAL NOT NULL,
     risk_level TEXT NOT NULL
+);
+
+-- Persistent operator allowlist: survives engine restarts (the --allowlist
+-- flag alone lost every entry on restart — live marathon finding).
+CREATE TABLE IF NOT EXISTS allowlist (
+    ip TEXT PRIMARY KEY,
+    ts REAL NOT NULL,
+    note TEXT
+);
+
+-- Persistent muted domains: matching queries are still stored but capped
+-- at LOW and never alerted/blocked (own-host telemetry endpoints).
+CREATE TABLE IF NOT EXISTS muted_domains (
+    domain TEXT PRIMARY KEY,
+    ts REAL NOT NULL,
+    note TEXT
 );
 """
 
@@ -170,6 +187,55 @@ class Storage:
             ).fetchall()
         keys = ("src_ip", "ts", "risk_level")
         return [dict(zip(keys, r)) for r in rows]
+
+    # ---- persistent allowlist + muted domains (survive restarts) --------
+
+    def allowlist_add(self, ip: str, note: str = "") -> bool:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO allowlist (ip, ts, note) VALUES (?, ?, ?)"
+                " ON CONFLICT(ip) DO UPDATE SET ts = excluded.ts,"
+                " note = excluded.note", (ip, time.time(), note))
+            self._conn.commit()
+            return True
+
+    def allowlist_remove(self, ip: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM allowlist WHERE ip = ?", (ip,))
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def allowlist_list(self) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ip, ts, note FROM allowlist ORDER BY ts").fetchall()
+        return [{"ip": ip, "ts": ts, "note": note} for ip, ts, note in rows]
+
+    def muted_add(self, domain: str, note: str = "") -> bool:
+        domain = domain.lower().strip()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO muted_domains (domain, ts, note) VALUES (?, ?, ?)"
+                " ON CONFLICT(domain) DO UPDATE SET ts = excluded.ts,"
+                " note = excluded.note", (domain, time.time(), note))
+            self._conn.commit()
+            return True
+
+    def muted_remove(self, domain: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM muted_domains WHERE domain = ?",
+                (domain.lower().strip(),))
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def muted_list(self) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT domain, ts, note FROM muted_domains ORDER BY ts"
+            ).fetchall()
+        return [{"domain": d, "ts": ts, "note": note} for d, ts, note in rows]
 
     def response_flag_count(self) -> int:
         """Alerts raised by the response (download/C2) channel."""
