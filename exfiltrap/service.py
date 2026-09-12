@@ -411,6 +411,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mute-domain", default="",
                         help="comma-separated domains whose queries are "
                              "stored but capped at LOW (own-host telemetry)")
+    parser.add_argument("--sinkhole", action="store_true",
+                        help="domain-level response: HIGH/CONFIRMED hostnames "
+                             "are answered 0.0.0.0 via the hosts file (needs "
+                             "root; expires with --block-ttl)")
     parser.add_argument("--alert", choices=("none", "syslog"), default=None,
                         help="SIEM alerting for HIGH/CONFIRMED detections")
     parser.add_argument("--verbose", "-v", action="store_true")
@@ -508,10 +512,21 @@ def main(argv: list[str] | None = None) -> int:
         storage.allowlist_add(ip, note="cli --allowlist")
     for dom in [d for d in args.mute_domain.split(",") if d]:
         storage.muted_add(dom, note="cli --mute-domain")
+    sinkhole = None
+    if args.sinkhole:
+        from exfiltrap.mitigation import DomainSinkhole
+        sinkhole = DomainSinkhole(
+            hosts_path=os.environ.get("EXFILTRAP_HOSTS_FILE", "/etc/hosts"),
+            ttl=args.block_ttl or 3600.0,
+        )
+        log.info("domain sinkhole enabled: HIGH/CONFIRMED hostnames are "
+                 "answered 0.0.0.0 via %s (TTL %.0fs)",
+                 sinkhole.hosts_path, sinkhole.ttl)
     mitigation = make_policy(
         mitigation,
         allowlist=[a["ip"] for a in storage.allowlist_list()],
         block_ttl=args.block_ttl or 1e18,
+        sinkhole=sinkhole,
     )
     pipeline = ExfilTrapPipeline(
         classifier_path=args.classifier,

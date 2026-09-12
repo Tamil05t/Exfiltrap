@@ -16,17 +16,27 @@ import time
 
 class PolicyMitigation:
     def __init__(self, inner, allowlist: tuple[str, ...] = (),
-                 block_ttl: float = 3600.0, clock=time.time):
+                 block_ttl: float = 3600.0, clock=time.time,
+                 sinkhole=None):
         self.inner = inner
         self.allowlist = set(allowlist)
         self.block_ttl = block_ttl
         self.clock = clock
         self._expires: dict[str, float] = {}
+        # Optional domain-level response (single-host deployments: block
+        # the exact DNS identity instead of the whole machine).
+        self.sinkhole = sinkhole
 
     def notify(self, assessment) -> bool:
         if assessment.risk_level not in getattr(
                 self.inner, "risk_levels", ("HIGH", "CONFIRMED")):
             return False
+        if (self.sinkhole is not None
+                and assessment.src_ip not in self.allowlist):
+            try:
+                self.sinkhole.notify(assessment)
+            except Exception:
+                pass  # sinkhole failure must not block source response
         return self.block_ip(assessment.src_ip)
 
     def block_ip(self, ip: str, timestamp: float = 0.0,
@@ -58,6 +68,8 @@ class PolicyMitigation:
         freed = [ip for ip, exp in self._expires.items() if exp <= now]
         for ip in freed:
             self.unblock(ip)
+        if self.sinkhole is not None:
+            self.sinkhole.reap_expired()
         return freed
 
     def is_blocked(self, ip: str) -> bool:
@@ -67,5 +79,5 @@ class PolicyMitigation:
         return set(getattr(self.inner, "blocked_ips", set()))
 
 
-def make_policy(inner, allowlist=(), block_ttl=3600.0) -> PolicyMitigation:
-    return PolicyMitigation(inner, tuple(allowlist), block_ttl)
+def make_policy(inner, allowlist=(), block_ttl=3600.0, sinkhole=None) -> PolicyMitigation:
+    return PolicyMitigation(inner, tuple(allowlist), block_ttl, sinkhole=sinkhole)

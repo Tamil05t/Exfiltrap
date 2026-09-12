@@ -1,5 +1,6 @@
 """Unit tests for M8 — mitigation safety rails (fully mocked, nothing executed)."""
 
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -164,3 +165,64 @@ class TestRealHostDefaults:
         m = IptablesMitigation(dry_run=True)
         with pytest.raises(SafetyError):
             m.block_ip("10.99.0.2")
+
+
+class TestDomainSinkhole:
+    """Domain-level response: flagged hostnames sinkholed via the hosts
+    file (single-host deployments where source-blocking = self-blocking)."""
+
+    def _make(self, tmp_path, ttl=3600.0, clock=time.time):
+        from exfiltrap.mitigation import DomainSinkhole
+        hosts = tmp_path / "hosts"
+        hosts.write_text("127.0.0.1 localhost\n")
+        return DomainSinkhole(hosts_path=str(hosts), ttl=ttl, clock=clock), hosts
+
+    def test_block_and_unblock_domain(self, tmp_path):
+        sn, hosts = self._make(tmp_path)
+        assert sn.block_domain("evil.tunnel.example") is True
+        text = hosts.read_text()
+        assert "0.0.0.0 evil.tunnel.example" in text
+        assert sn.MARKER in text
+        assert sn.blocked_domains() == ["evil.tunnel.example"]
+        assert sn.unblock_domain("evil.tunnel.example") is True
+        assert "evil.tunnel.example" not in hosts.read_text()
+        assert sn.blocked_domains() == []
+
+    def test_idempotent_no_duplicate_lines(self, tmp_path):
+        sn, hosts = self._make(tmp_path)
+        sn.block_domain("a.example")
+        sn.block_domain("a.example")
+        assert hosts.read_text().count("a.example") == 1
+
+    def test_injection_refused(self, tmp_path):
+        sn, hosts = self._make(tmp_path)
+        assert sn.block_domain("evil.example\n0.0.0.0 google.com") is False
+        assert sn.block_domain("evil.example extra stuff") is False
+        assert hosts.read_text() == "127.0.0.1 localhost\n"
+
+    def test_ttl_expiry_removes_entry(self, tmp_path):
+        clock = {"t": 1000.0}
+        sn, hosts = self._make(tmp_path, ttl=600.0, clock=lambda: clock["t"])
+        sn.block_domain("drip.example", timestamp=1000.0)
+        assert "drip.example" in hosts.read_text()
+        clock["t"] += 601.0
+        assert sn.reap_expired() == ["drip.example"]
+        assert "drip.example" not in hosts.read_text()
+
+    def test_notify_high_only_and_allowlisted_source_skipped(self, tmp_path):
+        from exfiltrap.policy import make_policy
+        from exfiltrap.mitigation import LogOnlyMitigation
+        from types import SimpleNamespace
+
+        sn, hosts = self._make(tmp_path)
+        pol = make_policy(LogOnlyMitigation(), allowlist=["10.0.0.9"],
+                          sinkhole=sn)
+        pol.notify(SimpleNamespace(risk_level="HIGH", src_ip="10.0.0.2",
+                                   qname="bad.example", timestamp=1.0))
+        assert "bad.example" in hosts.read_text()
+        pol.notify(SimpleNamespace(risk_level="HIGH", src_ip="10.0.0.9",
+                                   qname="allowed.example", timestamp=2.0))
+        assert "allowed.example" not in hosts.read_text()
+        pol.notify(SimpleNamespace(risk_level="LOW", src_ip="10.0.0.2",
+                                   qname="quiet.example", timestamp=3.0))
+        assert "quiet.example" not in hosts.read_text()

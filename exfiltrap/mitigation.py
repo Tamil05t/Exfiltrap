@@ -33,6 +33,7 @@ import os
 import platform
 import re
 import subprocess
+import time
 
 from exfiltrap import config
 
@@ -236,6 +237,85 @@ class NetshMitigation:
 
     def errors(self) -> list[str]:
         return list(self._errors)
+
+
+class DomainSinkhole:
+    """Domain-level response: answer flagged hostnames with 0.0.0.0 locally.
+
+    Source-IP blocks are the right response for a REMOTE compromised client
+    (the lab's nsB), but on a single-host deployment the source is the
+    operator's own machine — blocking it cuts ALL DNS. The domain response
+    is surgical: flagged hostnames go into the hosts file (0.0.0.0), killing
+    that exact channel while everything else keeps working. Entries carry
+    the block TTL and are removed on expiry.
+
+    Injection-safe: a qname must match [A-Za-z0-9._-] (no whitespace or
+    newlines can reach the hosts file).
+    """
+
+    MARKER = "# exfiltrap-managed"
+    _QNAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
+
+    def __init__(self, hosts_path: str = "/etc/hosts",
+                 ttl: float = 3600.0, clock=time.time,
+                 risk_levels=config.MITIGATION_RISK_LEVELS):
+        self.hosts_path = hosts_path
+        self.ttl = ttl
+        self.clock = clock
+        self.risk_levels = risk_levels
+        self._expires: dict[str, float] = {}
+
+    def _write_entry(self, qname: str) -> None:
+        with open(self.hosts_path, "r+", encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+            entry = f"0.0.0.0 {qname} {self.MARKER}\n"
+            if any(entry.strip() == ln.strip() for ln in lines):
+                return
+            fh.seek(0, 2)   # append; hosts files are read top-to-bottom
+            fh.write(entry)
+
+    def _remove_entry(self, qname: str) -> None:
+        with open(self.hosts_path, "r+", encoding="utf-8", errors="replace") as fh:
+            lines = [ln for ln in fh.readlines()
+                     if not (ln.strip().endswith(self.MARKER)
+                             and f" {qname} " in f" {ln.strip()} ")]
+
+        with open(self.hosts_path, "w", encoding="utf-8", errors="replace") as fh:
+            fh.writelines(lines)
+
+    def notify(self, assessment) -> bool:
+        if assessment.risk_level not in self.risk_levels:
+            return False
+        return self.block_domain(assessment.qname, assessment.timestamp)
+
+    def block_domain(self, qname: str, timestamp: float = 0.0) -> bool:
+        qname = (qname or "").strip().rstrip(".")
+        if not self._QNAME_RE.fullmatch(qname):
+            return False                      # injection attempt: refuse
+        self._write_entry(qname)
+        self._expires[qname] = self.clock() + self.ttl
+        return True
+
+    def unblock_domain(self, qname: str) -> bool:
+        qname = (qname or "").strip().rstrip(".")
+        self._expires.pop(qname, None)
+        self._remove_entry(qname)
+        return True
+
+    def reap_expired(self) -> list[str]:
+        now = self.clock()
+        freed = [q for q, exp in self._expires.items() if exp <= now]
+        for q in freed:
+            self.unblock_domain(q)
+        return freed
+
+    def blocked_domains(self) -> list[str]:
+        try:
+            with open(self.hosts_path, encoding="utf-8", errors="replace") as fh:
+                return [ln.split()[1] for ln in fh.readlines()
+                        if ln.strip().endswith(self.MARKER) and len(ln.split()) >= 2]
+        except OSError:
+            return []
 
 
 def make_mitigation(kind: str = "auto", **kwargs):
