@@ -60,7 +60,7 @@ prompt on Windows); afterwards it behaves like every installed application.
 | | capture | mitigation | install | daily use |
 |---|---|---|---|---|
 | **Linux (any distro)** | scapy on any iface via `CAP_NET_RAW` | iptables, namespace-scoped and safety-gated | `sudo ./tools/install_linux.sh eth0` (once) | `systemctl start exfiltrap@eth0`, auto-starts at boot; dashboard needs no privileges |
-| **Linux desktop app** | — | — | `make desktop-build` → `.deb`/`.rpm`/**`.AppImage`** (AppImage runs on every distro, no install) | unprivileged tray app |
+| **Linux desktop app** | — | — | `.deb`/`.rpm` (system webkit) · **PKGBUILD** for Arch (system webkit) · **Flatpak** (runtime-pinned webkit) — native windows everywhere, no bundled webview snapshot | unprivileged native monitor window |
 | **Windows 10/11** | scapy + Npcap (bundled by installer) | `netsh advfirewall` rules prefixed `ExFilTrap-block-*` | `build_windows.bat` → Inno Setup `ExFilTrap-Setup.exe`: one UAC prompt, installs Npcap silently, registers auto-start service | service runs at boot like any app; desktop shortcut opens the dashboard unprivileged |
 | **Linux service binary (no Python)** | any iface via CAP_NET_RAW | iptables/log | download `exfiltrap-linux-service` artifact | `sudo ./exfiltrap service --iface wlan0` |
 

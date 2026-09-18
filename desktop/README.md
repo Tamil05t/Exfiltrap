@@ -46,11 +46,32 @@ Terminal 2 — the desktop shell:
 
 Output in `src-tauri/target/release/bundle/`:
 
-* Linux: `.deb`, `.rpm`, and **`.AppImage`** — the AppImage runs on every
-  distro without installation, which answers cross-distro distribution.
+* Linux: `.deb` (and `.rpm` via `--bundles rpm`).
 * Windows: `.msi` and NSIS `.exe` setup. For the full Windows product
   (service registration + Npcap + signing) use
   `packaging/windows/build_windows.bat`, which builds the Python service
   and compiles `packaging/windows/exfiltrap.iss`.
 
 Generate icons first (one-time): see `src-tauri/icons/README.md`.
+
+## Linux distribution formats (and why the AppImage is gone)
+
+| format | webview | targets |
+|---|---|---|
+| `.deb` | **system** WebKitGTK 4.1 | Debian 13+, Ubuntu 24.04+, Kali |
+| **PKGBUILD** (`packaging/arch/`) | **system** WebKitGTK 4.1, compiled on install | Arch, CachyOS, EndeavourOS, Manjaro |
+| **Flatpak** (`packaging/flatpak/`) | runtime-pinned WebKitGTK (`org.gnome.Platform//49`) | every distro with Flatpak |
+
+The AppImage was retired in v1.4.0 after a week of live failures proved it
+structurally unsound for a webview app: a bundled WebKitGTK/GLib snapshot
+collides with rolling-release system libraries (glib symbol errors, blank
+windows on Kali/Debian 13), and WebKit's EGL path cannot initialize in
+GPU-less VMs at all (upstream tauri#11994). Both replacement formats solve
+it the same way — the shell always renders against a webview managed by
+the target system or runtime, never a frozen snapshot.
+
+Flatpak privilege note: the sandbox cannot reach the host polkit, so the
+Start button escapes deliberately via `flatpak-spawn --host pkexec`
+(see the `FLATPAK_ID` branch in `src-tauri/src/main.rs` and the manifest's
+`--talk-name=org.freedesktop.Flatpak`); the engine runs on the host with
+root + capture rights, exactly like the deb's staged engine.

@@ -1,0 +1,11 @@
+# Icon cache refresh (desktop entry + hicolor icon are new files).
+# Arch convention: update caches on install/upgrade, never on removal
+# (harmless either way; pacman may call the hooks itself).
+
+post_install() {
+  gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+}
+
+post_upgrade() {
+  post_install
+}

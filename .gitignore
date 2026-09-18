@@ -19,3 +19,14 @@ desktop/src-tauri/gen/
 # python
 *.egg-info/
 desktop/src-tauri/resources/
+# flatpak build staging (created by packaging/flatpak/build-flatpak.sh)
+packaging/flatpak/engine-prebuilt/
+packaging/flatpak/app-prebuilt/
+packaging/flatpak/.flatpak-builder/
+packaging/flatpak/build-dir/
+packaging/flatpak/repo/
+packaging/flatpak/*.flatpak
+# arch build outputs
+packaging/arch/*.pkg.tar.zst
+packaging/arch/src/
+packaging/arch/pkg/

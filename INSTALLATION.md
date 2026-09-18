@@ -64,32 +64,50 @@ and `%PROGRAMDATA%\ExFilTrap`).
 
 | your distro | use | why |
 |---|---|---|
-| **Kali, Debian 13+, Ubuntu 24.04+** | **`.deb`** (`sudo apt install ./ExFilTrap_*.deb`) | native format, no FUSE, desktop entry + engine included |
-| any distro, **no install wanted** | **`ExFilTrap-portable-linux.tar.gz`** | extract and run — no FUSE, no root to launch |
-| older distros with `libfuse2` present | `.AppImage` | classic AppImage route |
+| **Arch, CachyOS, EndeavourOS, Manjaro** | **PKGBUILD** (`packaging/arch/`) | shell compiles against the **system** `webkit2gtk-4.1` — nothing bundled to collide with rolling libraries |
+| **any distro with Flatpak** (Fedora, Debian, Ubuntu, Mint…) | **Flatpak** (`org.exfiltrap.desktop`) | GNOME runtime pins the exact webkit/GLib versions; native window everywhere |
+| **Kali, Debian 13+, Ubuntu 24.04+** | **`.deb`** (`sudo apt install ./ExFilTrap_*.deb`) | native format, desktop entry + engine included |
+| headless/server | `exfiltrap-linux-service.tar.gz` | engine only, no GUI |
 
-> The AppImage needs `libfuse2`, which Kali and Debian 13 removed from
-> their repositories — on those systems use the `.deb` or the portable
-> tarball instead; do not try to install libfuse2.
-
+> The AppImage format has been **retired** (v1.4.0): a bundled WebKitGTK
+> snapshot structurally cannot coexist with rolling-release system
+> libraries, and WebKit's EGL path cannot initialize in GPU-less VMs —
+> both were proven live. Arch (PKGBUILD) and Flatpak replace it with
+> native windows that render everywhere; the `.deb` and Windows packages
+> are unchanged.
 
 ### 3a. `.deb` package (Debian/Ubuntu)
 ```bash
 sudo apt install ./exfiltrap-desktop_1.0.0_amd64.deb   # desktop app only
 ```
 The service itself installs from source (3c) or via the install script; the
-`.deb`/`.AppImage` carry the **desktop monitor**.
+`.deb` carries the **desktop monitor**.
 
-### 3b. AppImage (any distro, no install, no root)
+### 3b. Arch family — PKGBUILD (Arch, CachyOS, EndeavourOS, Manjaro)
 ```bash
-chmod +x ExFilTrap-1.0.0.AppImage
-./ExFilTrap-1.0.0.AppImage
+git clone https://github.com/Tamil05t/Exfiltrap.git && cd Exfiltrap/packaging/arch
+makepkg -f                       # compiles the shell + freezes the engine
+pacman -U ex-fil-trap-git-*.pkg.tar.zst
 ```
-It lives in the system tray and attaches to a running service's API. If no
-service is running it stays in the tray and keeps polling — start the
-service (3c) and the window opens automatically.
+What you get: `/usr/bin/ex-fil-trap` (wrapper) → `/usr/lib/exfiltrap/`
+(shell binary + engine payload), desktop entry, and the same one-pkexec
+Start flow as the deb — the engine is staged to `/var/lib/exfiltrap/engine`
+on first Start. Because the shell links the system `webkit2gtk-4.1`,
+rendering follows your rolling updates instead of fighting them.
 
-### 3c. The detection service (from source — the normal route)
+### 3c. Flatpak (universal Linux)
+```bash
+# from the repo: build a single-file bundle (see packaging/flatpak/)
+bash packaging/flatpak/build-flatpak.sh --bundle
+flatpak install --user ExFilTrap_1.4.0_amd64.flatpak
+flatpak run org.exfiltrap.desktop
+```
+The monitor renders inside the GNOME runtime's guaranteed webkit2gtk-4.1;
+the Start button uses `flatpak-spawn --host pkexec` to launch the engine on
+the host with root + capture rights (the sandbox hole is explicit in the
+manifest: `--talk-name=org.freedesktop.Flatpak`).
+
+### 3d. The detection service (from source — the normal route)
 ```bash
 git clone <your-repo> && cd exfiltrap
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -182,36 +200,36 @@ bash tools/stress_test.sh                    # randomized stress suite
 
 ---
 
-## 9. Desktop app (AppImage/deb) troubleshooting
+## 9. Desktop app (deb / Arch / Flatpak) troubleshooting
 
-**Nothing happens when I open the AppImage** — work through this list in order:
+**Blank window / EGL errors** — this was the AppImage failure class; the
+retired format is gone. On the remaining formats: the deb renders with the
+system WebKitGTK (`sudo apt install libwebkit2gtk-4.1-0` if a minimal
+system lacks it), the Arch package links the system webkit you already
+have, and the Flatpak uses the GNOME runtime's pinned WebKitGTK.
 
-1. Mark it executable: `chmod +x ExFilTrap-*.AppImage`
-2. FUSE is required (Ubuntu 22.04+ no longer ships it):
-   `sudo apt install libfuse2`
-3. Still nothing? Extract-and-run bypasses FUSE entirely:
-   ```bash
-   ./ExFilTrap-*.AppImage --appimage-extract
-   ./squashfs-root/AppRun
-   ```
-4. WebKitGTK runtime libraries (the app renders with the system webview):
-   ```bash
-   sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 \
-     || sudo apt install libwebkit2gtk-4.0-37 libgtk-3-0 libayatana-appindicator3-1
-   ```
-5. **Important — the window behavior:** the desktop app is the *monitor*
+**Nothing happens when I open the desktop app** — work through this list:
+
+1. **Important — the window behavior:** the desktop app is the *monitor*
    for the detection service. On launch it shows a "ExfilTrap is starting…"
    screen and automatically switches to the dashboard the moment the
    service answers on `127.0.0.1:5050`. **If no service is running you get
-   the waiting screen, not a dashboard.** Start a service first:
+   the waiting screen, not a dashboard.** Press Start (one pkexec prompt
+   stages + launches the bundled engine), or start a service manually:
    ```bash
    sudo .venv/bin/python -m exfiltrap.service --fresh-db   # fresh data; captures ALL interfaces
    # or, for live capture (needs the installed service or sudo):
    sudo .venv/bin/python -m exfiltrap.service --iface YOUR_INTERFACE
    ```
    Find your interface name with `ip -br link` (e.g. `eth0`, `wlan0`, `enp3s0`).
-6. The `.deb` installs the same desktop app system-wide (Start menu entry);
-   the service itself is installed via `tools/install_linux.sh` (section 3c).
+2. Engine/start failures surface in the waiting screen with the engine log
+   tail; the full log is `/tmp/exfiltrap-service.log`.
+3. **Flatpak:** the Start button escapes the sandbox via
+   `flatpak-spawn --host pkexec` — if it fails, check that the
+   `--talk-name=org.freedesktop.Flatpak` permission is present
+   (`flatpak info org.exfiltrap.desktop | grep shared`).
+4. The `.deb` installs the same desktop app system-wide (Start menu entry);
+   the service itself is installed via `tools/install_linux.sh` (section 3d).
 
 **Live capture "from source" fails with a privileges error** — that is by
 design: packet capture needs elevated rights. Either run interactively with

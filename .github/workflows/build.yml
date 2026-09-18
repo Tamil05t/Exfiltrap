@@ -69,7 +69,7 @@ jobs:
           if-no-files-found: error
 
   linux-desktop:
-    name: Linux desktop (deb + portable + AppImage)
+    name: Linux desktop (deb + portable)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -103,17 +103,6 @@ jobs:
         run: |
           cd desktop
           npm run tauri build -- --bundles deb
-      - name: Build the AppImage (browser-dashboard edition — no WebKit/EGL)
-        # The old AppImage bundled WebKit/GTK and aborted on Kali/VMs
-        # ("Could not create default EGL display: EGL_BAD_PARAMETER").
-        # This edition bundles ONLY the detection engine; the dashboard
-        # is the default browser — universal on every distro.
-        continue-on-error: true
-        run: |
-          VERSION=$(python3 -c "import json;print(json.load(open('desktop/src-tauri/tauri.conf.json'))['version'])")
-          bash packaging/appimage/build_appimage.sh \
-            dist/exfiltrap desktop/src-tauri/icons/icon-source.png \
-            "$VERSION" .
       - name: Assemble the portable package from the INSTALLED .deb files
         run: |
           sudo apt install -y ./desktop/src-tauri/target/release/bundle/deb/*.deb
@@ -138,13 +127,106 @@ jobs:
       - name: Flatten artifact paths (one folder, no digging)
         run: |
           cp desktop/src-tauri/target/release/bundle/deb/*.deb ./
-          cp desktop/src-tauri/target/release/bundle/appimage/*.AppImage ./ 2>/dev/null || true
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: exfiltrap-desktop-linux
           path: |
             ExFilTrap_*.deb
-            ExFilTrap_*.AppImage
             ExFilTrap-portable-linux.tar.gz
+          if-no-files-found: error
+
+  linux-arch:
+    name: Arch package (PKGBUILD — system webkit)
+    runs-on: ubuntu-24.04
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm git rust nodejs npm python python-pip \
+            webkit2gtk-4.1 gtk3
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # git describe versioning in pkgver()
+      - name: makepkg
+        run: |
+          # makepkg refuses root; build as an unprivileged user. The
+          # checkout is placed into srcdir so makepkg builds THIS commit
+          # instead of re-cloning the repo.
+          useradd -m builder
+          mkdir -p /build/src
+          cp -r "$GITHUB_WORKSPACE" /build/src/Exfiltrap
+          cp "$GITHUB_WORKSPACE/packaging/arch/PKGBUILD" /build/
+          cp "$GITHUB_WORKSPACE/packaging/arch/ex-fil-trap.install" /build/
+          chown -R builder:builder /build
+          su builder -c 'cd /build && makepkg -f --noconfirm'
+          cp /build/*.pkg.tar.zst "$GITHUB_WORKSPACE/"
+      - name: Smoke — package metadata is parseable
+        run: |
+          tar --zstd -xOf *.pkg.tar.zst .PKGINFO | grep -q '^pkgname'
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: exfiltrap-arch
+          path: ./*.pkg.tar.zst
+          if-no-files-found: error
+
+  linux-engine-glibc235:
+    name: Engine on Ubuntu 22.04 (glibc floor — Flatpak host-side payload)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the engine
+        run: |
+          pip install -r requirements.txt pyinstaller
+          pyinstaller packaging/linux/exfiltrap-linux.spec --noconfirm \
+            --distpath dist --workpath build
+          ./dist/exfiltrap/exfiltrap privileges
+      - name: Package engine payload
+        run: tar -czf exfiltrap-engine.tar.gz -C dist exfiltrap
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: exfiltrap-engine-glibc235
+          path: exfiltrap-engine.tar.gz
+          if-no-files-found: error
+
+  linux-flatpak:
+    name: Flatpak (org.exfiltrap.desktop — runtime webkit)
+    runs-on: ubuntu-24.04
+    needs: [linux-desktop, linux-engine-glibc235]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --if-not-exists --user flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive \
+            org.gnome.Platform//49 org.gnome.Sdk//49
+      - name: Download payloads
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*"
+          merge-multiple: true
+          path: downloads
+      - name: Build the Flatpak (staged prebuilt payloads)
+        env:
+          ENGINE_PREBUILT_DIR: /tmp/exfiltrap-engine
+        run: |
+          mkdir -p /tmp/exfiltrap-engine
+          tar -xzf downloads/exfiltrap-engine.tar.gz -C /tmp/exfiltrap-engine
+          DEB_FILE=$(find downloads -name 'ExFilTrap_*.deb' | head -1)
+          export DEB_FILE
+          bash packaging/flatpak/build-flatpak.sh --bundle
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: exfiltrap-flatpak
+          path: packaging/flatpak/*.flatpak
           if-no-files-found: error

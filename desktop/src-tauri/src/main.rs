@@ -117,6 +117,25 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// bit, and AppImage mounts are read-only — running from a root-owned copy
 /// fixes both. Any previously running engine is stopped first, so pressing
 /// Start always yields a fresh, working session.
+/// Inside a Flatpak, this process is sandboxed but the engine must run on
+/// the HOST (root, CAP_NET_RAW, host firewall). The sandbox is escaped
+/// deliberately via `flatpak-spawn --host pkexec`; the root-side script
+/// then sees HOST paths, so the engine source dir is rewritten from the
+/// in-sandbox /app prefix to the app's files as visible from the host.
+fn host_visible_engine_dir(res_dir: &str) -> String {
+    match std::env::var("FLATPAK_ID") {
+        Ok(id) => match res_dir.strip_prefix("/app") {
+            Some(rest) => format!("/var/lib/flatpak/app/{id}/current/active/files{rest}"),
+            None => res_dir.to_string(),
+        },
+        Err(_) => res_dir.to_string(),
+    }
+}
+
+fn in_flatpak() -> bool {
+    std::env::var("FLATPAK_ID").is_ok()
+}
+
 #[tauri::command]
 async fn start_service(
     app: tauri::AppHandle,
@@ -129,7 +148,7 @@ async fn start_service(
         .and_then(|bin| bin.parent().map(|p| p.to_path_buf()))
         .or_else(|| engine_resource_dir(&app))
         .ok_or_else(|| "bundled detection engine not found in this package".to_string())?;
-    let mut res_dir = res_dir.to_string_lossy().to_string();
+    let mut res_dir = host_visible_engine_dir(&res_dir.to_string_lossy());
     // AppImage gotcha, found live: FUSE mounts serve ONLY the user who
     // launched them — root gets EPERM ("Permission denied" on cp), so a
     // root-side copy straight from /tmp/.mount_* fails silently. When the
@@ -186,10 +205,20 @@ async fn start_service(
          echo 'engine process did not come up after launch — see /tmp/exfiltrap-service.log'; exit 1"
     );
     // pkexec blocks until the polkit dialog is answered — run it on a
-    // blocking worker so the webview UI never freezes.
+    // blocking worker so the webview UI never freezes. Inside a Flatpak
+    // the sandbox cannot talk to the host polkit directly; the sanctioned
+    // escape is flatpak-spawn --host (needs the org.freedesktop.Flatpak
+    // talk permission, set in the manifest's finish-args).
+    let flatpak = in_flatpak();
     let out = tauri::async_runtime::spawn_blocking(move || {
-        Command::new("pkexec")
-            .arg("sh")
+        let mut cmd = if flatpak {
+            let mut c = Command::new("flatpak-spawn");
+            c.arg("--host").arg("pkexec");
+            c
+        } else {
+            Command::new("pkexec")
+        };
+        cmd.arg("sh")
             .arg("-c")
             .arg(&script)
             .output()
@@ -222,28 +251,41 @@ async fn start_service(
     }
 }
 
+/// Tail of a log string (used by service_log).
+fn tail_string(log: &str, max_bytes: usize) -> String {
+    let len = log.len();
+    if len > max_bytes {
+        // Walk forward to a UTF-8 char boundary (no nightly APIs).
+        let mut start = len - max_bytes;
+        while start < len && !log.is_char_boundary(start) {
+            start += 1;
+        }
+        log[start..].to_string()
+    } else {
+        log.to_string()
+    }
+}
+
 /// Tail of the engine log, for surfacing startup failures in the waiting
 /// screen (waiting.html polls this after a failed/timeout start).
 #[tauri::command]
 fn service_log() -> String {
-    match std::fs::read_to_string("/tmp/exfiltrap-service.log") {
-        Ok(log) => {
-            // Tail only — the log grows unbounded across sessions and the
-            // whole file would stall the webview.
-            let len = log.len();
-            if len > 8000 {
-                // Walk forward to a UTF-8 char boundary (no nightly APIs).
-                let mut start = len - 8000;
-                while start < len && !log.is_char_boundary(start) {
-                    start += 1;
-                }
-                log[start..].to_string()
-            } else {
-                log
-            }
-        }
-        Err(_) => String::new(),
-    }
+    const LOG: &str = "/tmp/exfiltrap-service.log";
+    // The engine runs on the HOST, and a Flatpak's /tmp is private — read
+    // the host log through the same sanctioned sandbox escape.
+    let log = if in_flatpak() {
+        Command::new("flatpak-spawn")
+            .args(["--host", "cat", LOG])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default()
+    } else {
+        std::fs::read_to_string(LOG).unwrap_or_default()
+    };
+    // Tail only — the log grows unbounded across sessions and the
+    // whole file would stall the webview.
+    tail_string(&log, 8000)
 }
 
 fn main() {

@@ -1,0 +1,64 @@
+# ExFilTrap Flatpak — universal Linux desktop distribution.
+#
+# Architecture (why this shape):
+#   * The Tauri shell is compiled against the GNOME runtime's webkit2gtk-4.1
+#     — the runtime guarantees the exact webview/GLib versions, which is the
+#     fix for the rolling-release library collisions that killed the
+#     AppImage (glib symbol errors, EGL aborts in GPU-less VMs).
+#   * The detection engine CANNOT run inside the sandbox (it needs root +
+#     CAP_NET_RAW + host firewall). The Start button therefore escapes the
+#     sandbox deliberately: `flatpak-spawn --host pkexec` (see finish-args
+#     and the FLATPAK_ID branch in desktop/src-tauri/src/main.rs), staging
+#     the engine to the host's /var/lib/exfiltrap/engine. The engine payload
+#     is built on the oldest supported glibc (Ubuntu 22.04) so the host-side
+#     engine also runs on Debian 12-class hosts.
+#   * Shell binary + engine payload are staged as local dirs by
+#     build-flatpak.sh — no network sources inside the manifest.
+#
+# Local build:  bash packaging/flatpak/build-flatpak.sh --bundle
+# CI:           the linux-flatpak job runs the same script.
+
+app-id: org.exfiltrap.desktop
+runtime: org.gnome.Platform
+runtime-version: "49"
+sdk: org.gnome.Sdk
+command: ex-fil-trap
+separate-locales: false
+
+finish-args:
+  # the dashboard talks to the engine's API on host loopback (127.0.0.1:5050)
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # GPU for the webview; WebKit falls back to software rendering without it
+  - --device=dri
+  - --talk-name=org.freedesktop.Notifications
+  # deliberate sandbox hole for the Start button: flatpak-spawn --host pkexec
+  - --talk-name=org.freedesktop.Flatpak
+
+modules:
+  # ---- detection engine payload (staged prebuilt; runs on the HOST) -----
+  - name: exfiltrap-engine
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/lib/exfiltrap-engine
+      - cp -r engine-prebuilt/. /app/lib/exfiltrap-engine/
+      - chmod +x /app/lib/exfiltrap-engine/exfiltrap
+    sources:
+      - type: dir
+        path: engine-prebuilt
+
+  # ---- Tauri shell (prebuilt; links the RUNTIME's webkit2gtk-4.1) -------
+  - name: ex-fil-trap
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 app-prebuilt/ex-fil-trap /app/lib/ex-fil-trap
+      - install -Dm755 app-prebuilt/wrapper.sh /app/bin/ex-fil-trap
+      - install -Dm644 app-prebuilt/org.exfiltrap.desktop.desktop
+        /app/share/applications/org.exfiltrap.desktop.desktop
+      - install -Dm644 app-prebuilt/icon.png
+        /app/share/icons/hicolor/256x256/apps/org.exfiltrap.desktop.png
+    sources:
+      - type: dir
+        path: app-prebuilt

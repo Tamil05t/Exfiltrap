@@ -4,7 +4,8 @@ PY    := .venv/bin/python
 IFACE ?=
 
 .PHONY: help test train eval service dashboard privileges \
-        install-linux uninstall-linux desktop-dev desktop-build
+        install-linux uninstall-linux desktop-dev desktop-build \
+        arch-package flatpak
 
 help:
 	@echo "ExfilTrap targets (detection service runs as root):"
@@ -15,7 +16,9 @@ help:
 	@echo "  make dashboard                  dashboard against the local DB"
 	@echo "  make install-linux IFACE=eth0   one-time privileged install"
 	@echo "  make uninstall-linux IFACE=eth0"
-	@echo "  make desktop-build              Tauri desktop app (deb/rpm/AppImage)"
+	@echo "  make desktop-build              Tauri desktop app (deb/rpm)"
+	@echo "  make arch-package               Arch package (needs makepkg)"
+	@echo "  make flatpak                    Flatpak bundle (needs flatpak-builder + docker)"
 
 test:
 	$(PY) -m pytest
@@ -46,3 +49,9 @@ desktop-dev:
 
 desktop-build:
 	cd desktop && npm install && npm run tauri build
+
+arch-package:
+	cd packaging/arch && makepkg -f
+
+flatpak:
+	bash packaging/flatpak/build-flatpak.sh --bundle

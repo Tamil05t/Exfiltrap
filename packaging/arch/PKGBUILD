@@ -1,0 +1,81 @@
+# Maintainer: Tamil05t <tamilarasu@users.noreply.github.com>
+# ExFilTrap on Arch: the desktop shell is compiled against the SYSTEM
+# webkit2gtk-4.1 — there is no bundled WebKit/GTK snapshot to collide with
+# Arch's rolling libraries (the failure class that killed the AppImage).
+# The detection engine ships as a self-contained PyInstaller payload, so
+# it does not touch the host python at runtime.
+#
+# Build:   makepkg -f          (from this directory)
+# Install: pacman -U ex-fil-trap-git-*.pkg.tar.zst
+#
+# The engine payload is staged to /var/lib/exfiltrap/engine at first Start
+# (one pkexec prompt) — identical to the .deb privilege model.
+
+pkgname=ex-fil-trap-git
+pkgver=1.4.0
+pkgrel=1
+pkgdesc="Stateful DNS tunneling & slow-drip exfiltration detector — native desktop monitor (Tauri, system webkit)"
+arch=('x86_64')
+url="https://github.com/Tamil05t/Exfiltrap"
+license=(LicenseRef-Proprietary)
+depends=('webkit2gtk-4.1' 'gtk3' 'hicolor-icon-theme')
+optdepends=('polkit: root authorization for the Start button')
+makedepends=('git' 'rust' 'nodejs' 'npm' 'python' 'python-pip')
+install=ex-fil-trap.install
+source=("git+https://github.com/Tamil05t/Exfiltrap.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd Exfiltrap
+  git describe --long --tags 2>/dev/null | sed 's/^v//;s/-/.r/;s/-/./g' \
+    || grep -o '"version": "[^"]*"' desktop/src-tauri/tauri.conf.json \
+         | head -1 | cut -d'"' -f4
+}
+
+build() {
+  cd Exfiltrap
+
+  # -- detection engine: self-contained PyInstaller onedir ----------------
+  # (the trained RF model is committed at data/model/rf_model.joblib, so
+  #  no training step is needed; requirements pin the deps)
+  python -m venv build-venv
+  ./build-venv/bin/pip install -r requirements.txt pyinstaller
+  ./build-venv/bin/pyinstaller packaging/linux/exfiltrap-linux.spec \
+    --noconfirm --distpath dist-engine --workpath build-engine
+  # smoke: the frozen engine must actually run on this system
+  ./dist-engine/exfiltrap/exfiltrap privileges
+
+  # -- desktop shell: compiled against the system web/gtk stack -----------
+  cd desktop
+  npm ci
+  npx tauri build --no-bundle
+}
+
+package() {
+  cd Exfiltrap
+
+  # real shell binary (off PATH; /usr/bin/ex-fil-trap is a wrapper)
+  local BIN
+  BIN=$(find desktop/src-tauri/target/release -maxdepth 1 -type f \
+        \( -name 'ex-fil-trap' -o -name 'exfiltrap-desktop' \) | head -1)
+  [ -x "$BIN" ] || { echo "tauri binary not found in target/release" >&2; return 1; }
+  install -Dm755 "$BIN" "$pkgdir/usr/lib/exfiltrap/ex-fil-trap"
+
+  # engine payload (runs as root from /var/lib/exfiltrap after staging)
+  cp -r dist-engine/exfiltrap "$pkgdir/usr/lib/exfiltrap/engine"
+  chmod +x "$pkgdir/usr/lib/exfiltrap/engine/exfiltrap"
+
+  # wrapper: main.rs resolves the engine through EXFILTRAP_SERVICE_BIN
+  install -d "$pkgdir/usr/bin"
+  cat > "$pkgdir/usr/bin/ex-fil-trap" <<'EOF'
+#!/bin/sh
+export EXFILTRAP_SERVICE_BIN=/usr/lib/exfiltrap/engine/exfiltrap
+exec /usr/lib/exfiltrap/ex-fil-trap "$@"
+EOF
+  chmod 755 "$pkgdir/usr/bin/ex-fil-trap"
+
+  install -Dm644 packaging/arch/ex-fil-trap.desktop \
+    "$pkgdir/usr/share/applications/ex-fil-trap.desktop"
+  install -Dm644 desktop/src-tauri/icons/icon.png \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/ex-fil-trap.png"
+}
