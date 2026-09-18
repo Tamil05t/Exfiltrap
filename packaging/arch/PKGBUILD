@@ -56,6 +56,12 @@ build() {
   # npm install (not ci): the committed lock file omits platform-variant
   # entries some npm versions require (run 2 failed on the riscv64 variant)
   npm install
+  # tauri-build validates bundle.resources at compile time — the frozen
+  # engine must exist in the source tree before the shell compiles (the
+  # deb CI job does the same copy)
+  mkdir -p src-tauri/resources
+  rm -rf src-tauri/resources/exfiltrap-engine
+  cp -r ../dist-engine/exfiltrap src-tauri/resources/exfiltrap-engine
   npx tauri build --no-bundle
 }
 

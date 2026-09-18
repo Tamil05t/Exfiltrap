@@ -102,7 +102,24 @@ StartupWMClass=org.exfiltrap.desktop
 X-Flatpak=org.exfiltrap.desktop
 EOF
 
-cp "$REPO_ROOT/desktop/src-tauri/icons/icon.png" "$HERE/app-prebuilt/icon.png"
+# Flatpak export rejects icons above 512x512 (the source icon is 1024) —
+# downscale to 256x256, with tool fallbacks and a loud warning if none.
+ICON_SRC="$REPO_ROOT/desktop/src-tauri/icons/icon.png"
+if command -v magick >/dev/null 2>&1; then
+    magick "$ICON_SRC" -resize 256x256 "$HERE/app-prebuilt/icon.png"
+elif command -v convert >/dev/null 2>&1; then
+    convert "$ICON_SRC" -resize 256x256 "$HERE/app-prebuilt/icon.png"
+elif python3 -c "import PIL" 2>/dev/null; then
+    python3 - "$ICON_SRC" "$HERE/app-prebuilt/icon.png" <<'PY'
+import sys
+from PIL import Image
+Image.open(sys.argv[1]).resize((256, 256)).save(sys.argv[2])
+PY
+else
+    cp "$ICON_SRC" "$HERE/app-prebuilt/icon.png"
+    echo "WARNING: no ImageMagick/Pillow found — icon stays 1024px;" \
+         "flatpak export will reject it" >&2
+fi
 
 # ---- build ----------------------------------------------------------------
 cd "$HERE"
