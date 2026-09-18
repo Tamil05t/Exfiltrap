@@ -151,12 +151,11 @@ jobs:
           fetch-depth: 0          # git describe versioning in pkgver()
       - name: makepkg
         run: |
-          # makepkg refuses root; build as an unprivileged user. The
-          # checkout is placed into srcdir so makepkg builds THIS commit
-          # instead of re-cloning the repo.
+          # makepkg refuses root; build as an unprivileged user. makepkg
+          # clones the source itself (git+ source) — the clone is HEAD of
+          # main, i.e. exactly this pushed commit.
           useradd -m builder
-          mkdir -p /build/src
-          cp -r "$GITHUB_WORKSPACE" /build/src/Exfiltrap
+          mkdir /build
           cp "$GITHUB_WORKSPACE/packaging/arch/PKGBUILD" /build/
           cp "$GITHUB_WORKSPACE/packaging/arch/ex-fil-trap.install" /build/
           chown -R builder:builder /build

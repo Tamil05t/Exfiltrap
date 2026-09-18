@@ -27,9 +27,15 @@ sha256sums=('SKIP')
 
 pkgver() {
   cd Exfiltrap
-  git describe --long --tags 2>/dev/null | sed 's/^v//;s/-/.r/;s/-/./g' \
-    || grep -o '"version": "[^"]*"' desktop/src-tauri/tauri.conf.json \
-         | head -1 | cut -d'"' -f4
+  local v
+  # NOTE: no pipefail here — a pipeline's exit status is its LAST command,
+  # so `git describe | sed` succeeds (empty) even with no tags and the
+  # || fallback would never fire. Test emptiness explicitly instead.
+  v=$(git describe --long --tags 2>/dev/null | sed 's/^v//;s/-/.r/;s/-/./g')
+  if [ -z "$v" ]; then
+    v=$(grep -m1 '"version"' desktop/src-tauri/tauri.conf.json | cut -d'"' -f4)
+  fi
+  echo "${v:-1.4.0}"
 }
 
 build() {
