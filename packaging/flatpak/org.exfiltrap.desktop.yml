@@ -39,11 +39,17 @@ finish-args:
 
 modules:
   # ---- detection engine payload (staged prebuilt; runs on the HOST) -----
+  # NOTE on paths: for `type: dir` sources flatpak-builder places the
+  # directory's CONTENTS at the build-dir root (there is no
+  # engine-prebuilt/ subdir inside the sandbox build) — commands below
+  # reference root paths, and the canonical staging layout from
+  # build-flatpak.sh puts the onedir's files at that root (engine binary
+  # at ./exfiltrap).
   - name: exfiltrap-engine
     buildsystem: simple
     build-commands:
       - mkdir -p /app/lib/exfiltrap-engine
-      - cp -r engine-prebuilt/. /app/lib/exfiltrap-engine/
+      - cp -r . /app/lib/exfiltrap-engine/
       - chmod +x /app/lib/exfiltrap-engine/exfiltrap
     sources:
       - type: dir
@@ -53,11 +59,11 @@ modules:
   - name: ex-fil-trap
     buildsystem: simple
     build-commands:
-      - install -Dm755 app-prebuilt/ex-fil-trap /app/lib/ex-fil-trap
-      - install -Dm755 app-prebuilt/wrapper.sh /app/bin/ex-fil-trap
-      - install -Dm644 app-prebuilt/org.exfiltrap.desktop.desktop
+      - install -Dm755 ex-fil-trap /app/lib/ex-fil-trap
+      - install -Dm755 wrapper.sh /app/bin/ex-fil-trap
+      - install -Dm644 org.exfiltrap.desktop.desktop
         /app/share/applications/org.exfiltrap.desktop.desktop
-      - install -Dm644 app-prebuilt/icon.png
+      - install -Dm644 icon.png
         /app/share/icons/hicolor/256x256/apps/org.exfiltrap.desktop.png
     sources:
       - type: dir

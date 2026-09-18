@@ -26,13 +26,22 @@ REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 WANT_BUNDLE=0
 [ "${1:-}" = "--bundle" ] && WANT_BUNDLE=1
 
-mkdir -p "$HERE/engine-prebuilt" "$HERE/app-prebuilt"
+mkdir -p "$HERE/app-prebuilt"
 
 # ---- engine payload ------------------------------------------------------
+# CANONICAL LAYOUT: engine-prebuilt/ IS the PyInstaller onedir — the
+# engine binary sits at engine-prebuilt/exfiltrap (a FILE, not a dir).
+# ENGINE_PREBUILT_DIR may point at the onedir itself or at a dir
+# CONTAINING it (a raw tarball extraction); both are normalized here.
 if [ -n "${ENGINE_PREBUILT_DIR:-}" ]; then
     rm -rf "$HERE/engine-prebuilt"
-    cp -r "$ENGINE_PREBUILT_DIR" "$HERE/engine-prebuilt"
-elif [ ! -x "$HERE/engine-prebuilt/exfiltrap" ]; then
+    SRC="$ENGINE_PREBUILT_DIR"
+    if [ -d "$SRC/exfiltrap" ] && [ -f "$SRC/exfiltrap/exfiltrap" ]; then
+        SRC="$SRC/exfiltrap"          # dir containing the onedir
+    fi
+    mkdir -p "$HERE/engine-prebuilt"
+    cp -r "$SRC/." "$HERE/engine-prebuilt/"
+elif [ ! -f "$HERE/engine-prebuilt/exfiltrap" ]; then
     echo "== Building the engine in ubuntu:22.04 (glibc 2.35 floor)…"
     rm -rf "$HERE/engine-prebuilt"
     docker run --rm -v "$REPO_ROOT":/src:ro -v "$HERE":/out ubuntu:22.04 bash -c '
@@ -44,10 +53,10 @@ elif [ ! -x "$HERE/engine-prebuilt/exfiltrap" ]; then
         /venv/bin/pyinstaller packaging/linux/exfiltrap-linux.spec \
             --noconfirm --distpath /engine --workpath /engine-build
         /engine/exfiltrap/exfiltrap privileges
-        mkdir -p /out/engine-prebuilt && cp -r /engine/exfiltrap /out/engine-prebuilt/
+        mkdir -p /out/engine-prebuilt && cp -r /engine/exfiltrap/. /out/engine-prebuilt/
     '
 fi
-[ -x "$HERE/engine-prebuilt/exfiltrap" ] || { echo "engine payload missing" >&2; exit 1; }
+[ -f "$HERE/engine-prebuilt/exfiltrap" ] || { echo "engine payload missing (no exfiltrap binary at engine-prebuilt/ root)" >&2; exit 1; }
 
 # ---- shell binary --------------------------------------------------------
 if [ -n "${SHELL_BIN:-}" ]; then
@@ -104,7 +113,8 @@ echo "  flatpak-builder --user --install --force-clean org.exfiltrap.desktop.yml
 echo "  (from this directory) or run: flatpak run org.exfiltrap.desktop"
 
 if [ "$WANT_BUNDLE" = 1 ]; then
-    OUT="ExFilTrap_1.4.0_amd64.flatpak"
+    VERSION="$(python3 -c "import json;print(json.load(open('$REPO_ROOT/desktop/src-tauri/tauri.conf.json'))['version'])" 2>/dev/null || echo dev)"
+    OUT="ExFilTrap_${VERSION}_amd64.flatpak"
     flatpak build-bundle repo "$OUT" org.exfiltrap.desktop
     echo "single-file bundle: $HERE/$OUT"
 fi

@@ -53,7 +53,9 @@ build() {
 
   # -- desktop shell: compiled against the system web/gtk stack -----------
   cd desktop
-  npm ci
+  # npm install (not ci): the committed lock file omits platform-variant
+  # entries some npm versions require (run 2 failed on the riscv64 variant)
+  npm install
   npx tauri build --no-bundle
 }
 
