@@ -15,7 +15,18 @@ def dns_query_packet(qname="abc.tunnel.example", src="10.99.0.2"):
     )
 
 
-@pytest.mark.skipif(os.geteuid() != 0, reason="needs root for live sniffing")
+def _is_root() -> bool:
+    """Cross-platform root check.
+
+    ``os.geteuid`` does not exist on Windows, so a bare call at import time
+    raised AttributeError during collection and aborted the ENTIRE test
+    suite on Windows runners. The live-sniff test is Linux-only anyway.
+    """
+    geteuid = getattr(os, "geteuid", None)
+    return bool(geteuid and geteuid() == 0)
+
+
+@pytest.mark.skipif(not _is_root(), reason="needs root for live sniffing")
 class TestLiveSmoke:
     def test_loopback_sniff(self):
         # Only executed as root (e.g. inside the lab namespace).

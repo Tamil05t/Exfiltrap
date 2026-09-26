@@ -1,9 +1,11 @@
 // ExFilTrap desktop shell (Tauri v2) — ALL-IN-ONE product.
 //
 // The detection engine (PyInstaller `exfiltrap` service binary) ships
-// INSIDE this package as a bundled resource. The waiting screen starts it
-// with one root authorization (pkexec) and the window auto-navigates to
-// the dashboard when the API answers.
+// INSIDE this package as a bundled resource. On launch the app AUTO-STARTS
+// the engine when nothing is already serving the API (one root
+// authorization via pkexec), then navigates to the dashboard as soon as the
+// API answers. A manual Start button on the waiting screen remains as a
+// fallback when auto-start is declined or polkit is unavailable.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -48,8 +50,10 @@ fn service_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
         }
     }
     for candidate in [
-        "exfiltrap-engine/exfiltrap",
+        // Tauri's real AppImage/deb resource layout (mainBinaryName dir):
+        //   ${APPDIR}/usr/lib/ex-fil-trap/resources/exfiltrap-engine
         "resources/exfiltrap-engine/exfiltrap",
+        "exfiltrap-engine/exfiltrap",
         "exfiltrap-engine",
         "exfiltrap/exfiltrap",
         "dist/exfiltrap/exfiltrap",
@@ -76,7 +80,7 @@ fn service_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
 
 /// Resource directory that contains the bundled engine.
 fn engine_resource_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
-    for candidate in ["exfiltrap-engine", "resources/exfiltrap-engine"] {
+    for candidate in ["resources/exfiltrap-engine", "exfiltrap-engine"] {
         if let Ok(p) = app.path().resolve(candidate, BaseDirectory::Resource) {
             if p.join("exfiltrap").exists() {
                 return Some(p);
@@ -136,17 +140,13 @@ fn in_flatpak() -> bool {
     std::env::var("FLATPAK_ID").is_ok()
 }
 
-#[tauri::command]
-async fn start_service(
-    app: tauri::AppHandle,
-    iface: String,
-) -> Result<String, String> {
-    if cfg!(target_os = "windows") {
-        return Err("On Windows, run as Administrator: exfiltrap.exe service --iface <adapter>\n(or install ExFilTrap-Setup.exe — the service starts automatically)".to_string());
-    }
-    let res_dir = service_binary(&app)
+/// Build the root-side launch script for a given interface hint. Shared by
+/// the interactive Start button and the launch-time auto-start so both use
+/// identical, tested logic.
+fn build_launch_script(app: &tauri::AppHandle, iface: &str) -> Result<String, String> {
+    let res_dir = service_binary(app)
         .and_then(|bin| bin.parent().map(|p| p.to_path_buf()))
-        .or_else(|| engine_resource_dir(&app))
+        .or_else(|| engine_resource_dir(app))
         .ok_or_else(|| "bundled detection engine not found in this package".to_string())?;
     let mut res_dir = host_visible_engine_dir(&res_dir.to_string_lossy());
     // AppImage gotcha, found live: FUSE mounts serve ONLY the user who
@@ -188,7 +188,7 @@ async fn start_service(
     // `set -e` on the copy chain: a failed cp previously fell through to
     // "success" (the AppImage/root-EPERM case) and the UI waited on an
     // engine that never came. Errors now surface through pkexec's stderr.
-    let script = format!(
+    Ok(format!(
         "set -e; \
          systemctl stop 'exfiltrap@*' >/dev/null 2>&1 || true; \
          pkill -x exfiltrap >/dev/null 2>&1 || true; sleep 1; \
@@ -203,12 +203,14 @@ async fn start_service(
            i=$((i+1)); sleep 0.5; \
          done; \
          echo 'engine process did not come up after launch — see /tmp/exfiltrap-service.log'; exit 1"
-    );
-    // pkexec blocks until the polkit dialog is answered — run it on a
-    // blocking worker so the webview UI never freezes. Inside a Flatpak
-    // the sandbox cannot talk to the host polkit directly; the sanctioned
-    // escape is flatpak-spawn --host (needs the org.freedesktop.Flatpak
-    // talk permission, set in the manifest's finish-args).
+    ))
+}
+
+/// Run a root-side script through pkexec (blocking worker). Inside a
+/// Flatpak the sandbox cannot talk to the host polkit directly; the
+/// sanctioned escape is flatpak-spawn --host (needs the
+/// org.freedesktop.Flatpak talk permission, set in the manifest).
+async fn run_pkexec(script: String) -> Result<(), String> {
     let flatpak = in_flatpak();
     let out = tauri::async_runtime::spawn_blocking(move || {
         let mut cmd = if flatpak {
@@ -227,7 +229,7 @@ async fn start_service(
     .await
     .map_err(|e| format!("join error: {e}"))??;
     if out.status.success() {
-        Ok("service start requested".into())
+        Ok(())
     } else {
         // The script reports its own failures (copy errors, launch check)
         // on stdout; pkexec/policy errors arrive on stderr.
@@ -248,6 +250,43 @@ async fn start_service(
             }
         };
         Err(format!("pkexec failed: {detail}"))
+    }
+}
+
+#[tauri::command]
+async fn start_service(
+    app: tauri::AppHandle,
+    iface: String,
+) -> Result<String, String> {
+    if cfg!(target_os = "windows") {
+        return Err("On Windows, run as Administrator: exfiltrap.exe service --iface <adapter>\n(or install ExFilTrap-Setup.exe — the service starts automatically)".to_string());
+    }
+    let script = build_launch_script(&app, &iface)?;
+    run_pkexec(script).await?;
+    Ok("service start requested".into())
+}
+
+/// Launch-time auto-start: when the API is not already up and a bundled
+/// engine is present, start it WITHOUT waiting for the user to click. This
+/// is what turns the AppImage from a static splash into a self-starting
+/// product. Failures are non-fatal — the waiting screen still offers the
+/// manual Start button and surfaces the engine log.
+async fn autostart_engine(app: tauri::AppHandle) {
+    if api_up() {
+        return;
+    }
+    let script = match build_launch_script(&app, "") {
+        Ok(s) => s,
+        // No bundled engine (e.g. a dashboard-only run): nothing to do.
+        Err(_) => return,
+    };
+    match run_pkexec(script).await {
+        Ok(()) => {}
+        Err(e) => {
+            // Polkit may be unavailable in a headless session; the manual
+            // button remains, so just log for the splash's log viewer.
+            eprintln!("[exfiltrap] auto-start did not complete: {e}");
+        }
     }
 }
 
@@ -348,13 +387,26 @@ fn main() {
                 .build(app)?;
 
             // Poll for the service; navigate to the dashboard when it's up.
+            //
+            // If nothing is serving the API yet, actively start the bundled
+            // engine instead of leaving the user on a static splash — this
+            // is the fix for "the AppImage just sits there". A short grace
+            // period first lets an already-running service win without us
+            // stopping/restarting it. Auto-start is best-effort: if polkit
+            // is unavailable the splash's manual Start button still works.
             let handle = app.handle().clone();
-            thread::spawn(move || loop {
-                if api_up() {
-                    navigate_to_dashboard(&handle);
-                    break;
+            let autostart_handle = app.handle().clone();
+            thread::spawn(move || {
+                if cfg!(not(target_os = "windows")) {
+                    tauri::async_runtime::spawn(autostart_engine(autostart_handle));
                 }
-                thread::sleep(Duration::from_secs(2));
+                loop {
+                    if api_up() {
+                        navigate_to_dashboard(&handle);
+                        break;
+                    }
+                    thread::sleep(Duration::from_secs(2));
+                }
             });
             Ok(())
         })

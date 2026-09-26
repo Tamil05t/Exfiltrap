@@ -6,6 +6,22 @@ on:
   workflow_dispatch:
 
 jobs:
+  unit-tests:
+    name: Unit tests (pytest)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test deps
+        run: pip install -r requirements.txt
+      - name: Run the suite
+        # The suite previously ran NOWHERE, so a Windows-only regression
+        # (winservice's bad `starttype=` kwarg) and a collection crash on
+        # Windows (os.geteuid at import) both shipped unnoticed.
+        run: python -m pytest tests/ -q
+
   windows:
     name: Windows service + installer
     runs-on: windows-latest
@@ -20,19 +36,51 @@ jobs:
       - name: Train detection model (synthetic corpus fallback on CI)
         run: python tools/train_classifier.py
       - name: Build exfiltrap.exe (--onedir; no UPX — AV posture)
-        run: pyinstaller packaging/windows/exfiltrap.spec --noconfirm --distpath dist --workpath build
+        run: pyinstaller packaging/windows/exfiltrap.spec --noconfirm --clean --distpath dist --workpath build
       - name: Smoke-test the packaged CLI + model load
         run: |
           dist\exfiltrap\exfiltrap.exe privileges
           dist\exfiltrap\exfiltrap.exe eval --profiles benign --full-only
+      - name: Smoke-test the bundled dashboard UI
+        shell: pwsh
+        run: |
+          # The frozen engine must carry the dashboard templates, and the
+          # console must expose the new UI shell (view-overview + SSE).
+          $idx = Get-ChildItem dist\exfiltrap -Recurse -Filter index.html |
+                 Where-Object { $_.FullName -match 'dashboard/templates' } |
+                 Select-Object -First 1
+          if (-not $idx) { throw "dashboard index.html missing from bundle" }
+          $html = Get-Content -Raw $idx.FullName
+          foreach ($needle in @('ExfilTrap','view-overview','api/stream')) {
+            if ($html -notmatch [regex]::Escape($needle)) {
+              throw "bundled UI is missing '$needle' (stale build?)"
+            }
+          }
+          Write-Host "OK — bundled UI at $($idx.FullName)"
       - name: Build installer (Inno Setup)
-        shell: cmd
+        shell: pwsh
         run: |
           choco install innosetup -y --no-progress
-          set ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe
-          if not exist "%ISCC%" set ISCC=iscc
-          rem Npcap is bundled at packaging time by the maintainer, not CI.
-          "%ISCC%" /DMyAppVersion="${{ github.ref_name }}" packaging/windows/exfiltrap.iss || echo "iscc skipped (optional)"
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "iscc" }
+          # Derive a clean numeric version. On a branch push github.ref_name
+          # is "main" (not a version) — fall back to the tauri.conf version so
+          # the installer never ships a garbage version string.
+          $ref = "${{ github.ref_name }}"
+          if ($ref -match '^v?[0-9]+(\.[0-9]+){1,2}$') {
+            $ver = $ref -replace '^v', ''
+          } else {
+            $ver = (Get-Content desktop/src-tauri/tauri.conf.json |
+                    ConvertFrom-Json).version
+          }
+          Write-Host "Building installer version $ver"
+          # Npcap is bundled at packaging time by the maintainer, not CI.
+          # -D defines MyAppVersion; the .iss guards it with #ifndef.
+          & $iscc "-DMyAppVersion=$ver" packaging/windows/exfiltrap.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          if (-not (Test-Path dist/ExfilTrap-Setup.exe)) {
+            throw "ISCC reported success but dist/ExfilTrap-Setup.exe is missing"
+          }
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -53,7 +101,7 @@ jobs:
       - name: Install build deps
         run: pip install -r requirements.txt pyinstaller
       - name: Build exfiltrap service (--onedir)
-        run: pyinstaller packaging/linux/exfiltrap-linux.spec --noconfirm --distpath dist --workpath build
+        run: pyinstaller packaging/linux/exfiltrap-linux.spec --noconfirm --clean --distpath dist --workpath build
       - name: Smoke-test the packaged CLI + model load
         run: |
           ./dist/exfiltrap/exfiltrap privileges
@@ -88,12 +136,20 @@ jobs:
       - name: Build bundled detection engine (goes INSIDE the deb/portable)
         run: |
           pip install -r requirements.txt pyinstaller
-          pyinstaller packaging/linux/exfiltrap-linux.spec --noconfirm --distpath dist --workpath build
+          pyinstaller packaging/linux/exfiltrap-linux.spec --noconfirm --clean --distpath dist --workpath build
           ./dist/exfiltrap/exfiltrap privileges
           timeout 300 ./dist/exfiltrap/exfiltrap eval --profiles benign --full-only
           mkdir -p desktop/src-tauri/resources
           rm -rf desktop/src-tauri/resources/exfiltrap-engine
           cp -r dist/exfiltrap desktop/src-tauri/resources/exfiltrap-engine
+      - name: Verify the bundled dashboard UI is the current one
+        run: |
+          IDX=$(find dist/exfiltrap -path '*dashboard/templates/index.html' | head -1)
+          test -n "$IDX" || { echo "dashboard index.html missing"; exit 1; }
+          for needle in ExfilTrap view-overview api/stream; do
+            grep -q "$needle" "$IDX" || { echo "bundled UI missing '$needle'"; exit 1; }
+          done
+          echo "OK — bundled UI at $IDX"
       - name: Generate platform icons from the source icon
         run: |
           python tools/make_icon.py desktop/src-tauri/icons/icon-source.png
@@ -159,10 +215,21 @@ jobs:
           test -n "$APPIMAGE" && test -x "$APPIMAGE"
           cd "$(mktemp -d)"
           "$GITHUB_WORKSPACE/$APPIMAGE" --appimage-extract >/dev/null
-          ./squashfs-root/usr/bin/exfiltrap-engine/exfiltrap privileges
-          ./squashfs-root/usr/bin/exfiltrap-engine/exfiltrap service --help \
-            | head -5
+          # AppRun path (EXFILTRAP_SERVICE_BIN target)
           test -x ./squashfs-root/usr/bin/ex-fil-trap
+          ./squashfs-root/usr/bin/exfiltrap-engine/exfiltrap privileges
+          ./squashfs-root/usr/bin/exfiltrap-engine/exfiltrap service --help | head -5
+          # Tauri resource path (BaseDirectory::Resource ->
+          #   $APPDIR/usr/lib/ex-fil-trap/resources/exfiltrap-engine) — must
+          # exist or the shell cannot start the engine and the AppImage
+          # hangs on the splash screen.
+          test -x ./squashfs-root/usr/lib/ex-fil-trap/resources/exfiltrap-engine/exfiltrap
+          ./squashfs-root/usr/lib/ex-fil-trap/resources/exfiltrap-engine/exfiltrap privileges
+          # Engine must carry the new dashboard UI (the whole point of the
+          # rebuild) — fail if the template is missing from the bundle.
+          find ./squashfs-root/usr/lib/ex-fil-trap/resources/exfiltrap-engine \
+            -name 'index.html' -path '*dashboard/templates*' | grep -q . \
+            || { echo "dashboard templates missing from engine"; exit 1; }
           echo "AppImage layout OK"
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -217,7 +284,7 @@ jobs:
       - name: Build the engine
         run: |
           pip install -r requirements.txt pyinstaller
-          pyinstaller packaging/linux/exfiltrap-linux.spec --noconfirm \
+          pyinstaller packaging/linux/exfiltrap-linux.spec --noconfirm --clean \
             --distpath dist --workpath build
           ./dist/exfiltrap/exfiltrap privileges
       - name: Package engine payload

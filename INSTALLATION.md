@@ -41,6 +41,8 @@ silently — no separate download.
    mitigation = log          ; log | netsh
    execute = no              ; yes = actually create firewall rules
    ```
+   `iface = auto` (what the installer writes) resolves to the default-route
+   adapter at service start.
 4. Restart the service after editing:
    `exfiltrap.exe winservice stop` then `start` (elevated prompt).
 5. Open the dashboard: Start Menu → **ExFilTrap** (or any browser →
@@ -67,20 +69,26 @@ and `%PROGRAMDATA%\ExFilTrap`).
 | **Arch, CachyOS, EndeavourOS, Manjaro** | **PKGBUILD** (`packaging/arch/`) | shell compiles against the **system** `webkit2gtk-4.1` — nothing bundled to collide with rolling libraries |
 | **any distro with Flatpak** (Fedora, Debian, Ubuntu, Mint…) | **Flatpak** (`org.exfiltrap.desktop`) | GNOME runtime pins the exact webkit/GLib versions; native window everywhere |
 | **Kali, Debian 13+, Ubuntu 24.04+** | **`.deb`** (`sudo apt install ./ExFilTrap_*.deb`) | native format, desktop entry + engine included |
+| single-file, compatible host | **AppImage** (`ExFilTrap-*.AppImage`) | one file, no install — rebuilt in v1.4.0 to ship the new console UI and auto-start the engine on launch |
 | headless/server | `exfiltrap-linux-service.tar.gz` | engine only, no GUI |
 
-> The AppImage format has been **retired** (v1.4.0): a bundled WebKitGTK
-> snapshot structurally cannot coexist with rolling-release system
-> libraries, and WebKit's EGL path cannot initialize in GPU-less VMs —
-> both were proven live. Arch (PKGBUILD) and Flatpak replace it with
-> native windows that render everywhere; the `.deb` and Windows packages
-> are unchanged.
+> **AppImage status (v1.4.0):** the bundled-WebKit AppImage is **rebuilt and
+> supported again**. Two defects made it appear "static": the engine was
+> packaged at a path Tauri never resolves, and the shell waited on a splash
+> instead of starting the engine. Both are fixed — the engine now ships at
+> `$APPDIR/usr/lib/ex-fil-trap/resources/exfiltrap-engine` and the shell
+> auto-starts it on launch. On rolling-release distros and GPU-less VMs the
+> *preferred* formats remain the PKGBUILD and Flatpak (native/runtime-managed
+> webviews, with no frozen GLib snapshot to collide with), because a bundled
+> WebKitGTK can still hit symbol conflicts that no packaging fix can remove.
+> Use the AppImage when you want a single file and your host's GL/WebKit is
+> compatible; the `.deb`, Arch and Flatpak packages are unchanged.
 
 ### 3a. `.deb` package (Debian/Ubuntu)
 ```bash
-sudo apt install ./exfiltrap-desktop_1.0.0_amd64.deb   # desktop app only
+sudo apt install ./ExFilTrap_1.4.0_amd64.deb           # desktop app
 ```
-The service itself installs from source (3c) or via the install script; the
+The service itself installs from source (3d) or via the install script; the
 `.deb` carries the **desktop monitor**.
 
 ### 3b. Arch family — PKGBUILD (Arch, CachyOS, EndeavourOS, Manjaro)
@@ -136,10 +144,15 @@ Dashboard: any browser → `http://127.0.0.1:5050` (served by the service).
 exfiltrap privileges                    # (source: .venv/bin/python -m exfiltrap.privileges)
 curl http://127.0.0.1:5050/api/status   # mode, uptime, capture_heartbeat_age_s
 ```
-Open the dashboard: the header should show the mode and a **green heartbeat
-dot**; send any DNS traffic from the machine and watch the Overview counters
-move. To see detection immediately, run the demo mode — it replays a staged
-slow-drip + fast-tunnel incident through the real pipeline.
+Open the dashboard: the status bar should show the mode and a **green
+capture dot**; send any DNS traffic from the machine and watch the Overview
+counters move. To exercise the detector deterministically, drive real
+traffic with the bundled attacker client (there is **no demo mode** — the
+project deliberately ships none):
+
+```bash
+.venv/bin/python tools/attacker_client.py --help   # fast + slow-drip modes
+```
 
 ---
 
@@ -182,7 +195,7 @@ you'd tune first.
 | Windows: capture dead | Npcap missing → reinstall it (bundled in Setup), check `iface` name in `service.ini` |
 | dashboard shows stale heartbeats / nothing | service down → `systemctl status exfiltrap@<iface>` / `exfiltrap.exe winservice start` |
 | port 5050 busy | another instance running, or set `--api-port` |
-| a benign host got blocked | use the Blocked tab's unblock button (TTL also auto-unbans), then add it to `--allowlist` |
+| a benign host got blocked | use the Response → Ledger unblock button (TTL also auto-unbans), then add it to `--allowlist` |
 | benched/CI machine without syslog | alerts degrade to a no-op silently; UI and DB are unaffected |
 
 ---
@@ -200,22 +213,24 @@ bash tools/stress_test.sh                    # randomized stress suite
 
 ---
 
-## 9. Desktop app (deb / Arch / Flatpak) troubleshooting
+## 9. Desktop app troubleshooting (deb / AppImage / Arch / Flatpak)
 
-**Blank window / EGL errors** — this was the AppImage failure class; the
-retired format is gone. On the remaining formats: the deb renders with the
-system WebKitGTK (`sudo apt install libwebkit2gtk-4.1-0` if a minimal
-system lacks it), the Arch package links the system webkit you already
-have, and the Flatpak uses the GNOME runtime's pinned WebKitGTK.
+**Blank window / EGL errors** — a bundled WebKitGTK snapshot can collide
+with rolling-release system libraries, and WebKit's EGL path may not
+initialize in a GPU-less VM. The AppImage bundles its own WebKit, so if it
+renders blank, use the `.deb`, PKGBUILD or Flatpak instead — those always
+render against a system- or runtime-managed WebKit. The shell also sets
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` / `WEBKIT_DISABLE_COMPOSITING_MODE=1`
+automatically to mitigate this.
 
 **Nothing happens when I open the desktop app** — work through this list:
 
-1. **Important — the window behavior:** the desktop app is the *monitor*
-   for the detection service. On launch it shows a "ExfilTrap is starting…"
-   screen and automatically switches to the dashboard the moment the
-   service answers on `127.0.0.1:5050`. **If no service is running you get
-   the waiting screen, not a dashboard.** Press Start (one pkexec prompt
-   stages + launches the bundled engine), or start a service manually:
+1. **Window behavior:** the desktop app is the *monitor* for the detection
+   service. On launch it shows a "starting…" screen and **auto-starts the
+   bundled engine**, then switches to the dashboard the moment the service
+   answers on `127.0.0.1:5050`. If auto-start is declined (pkexec prompt
+   cancelled) you get the waiting screen, not a dashboard — press Start to
+   retry, or start a service manually:
    ```bash
    sudo .venv/bin/python -m exfiltrap.service --fresh-db   # fresh data; captures ALL interfaces
    # or, for live capture (needs the installed service or sudo):
@@ -224,7 +239,7 @@ have, and the Flatpak uses the GNOME runtime's pinned WebKitGTK.
    Find your interface name with `ip -br link` (e.g. `eth0`, `wlan0`, `enp3s0`).
 2. Engine/start failures surface in the waiting screen with the engine log
    tail; the full log is `/tmp/exfiltrap-service.log`.
-3. **Flatpak:** the Start button escapes the sandbox via
+3. **Flatpak:** auto-start escapes the sandbox via
    `flatpak-spawn --host pkexec` — if it fails, check that the
    `--talk-name=org.freedesktop.Flatpak` permission is present
    (`flatpak info org.exfiltrap.desktop | grep shared`).
@@ -237,11 +252,11 @@ design: packet capture needs elevated rights. Either run interactively with
 password (`systemctl start exfiltrap@<iface>`).
 
 **Dashboard shows old test runs / the unblock button does nothing** —
-upgrade to ≥ this version: `--fresh-db` starts with an empty database
-(`--fresh-db`), the Blocked tab reads live data, and Unblock now
-works in every mode (it clears the block row; with an active firewall
-backend it also removes the actual rule). Old test databases can simply be
-deleted: `rm data/exfiltrap.db*`.
+upgrade to ≥ this version: `--fresh-db` starts with an empty database, the
+Response → Ledger reads live data, and Unblock posts the correct
+`{src_ip}` payload (older builds sent `{target}`, which the API ignored, so
+Unblock silently no-op'd). Old test databases can simply be deleted:
+`rm data/exfiltrap.db*`.
 
 ---
 

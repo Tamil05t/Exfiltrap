@@ -28,11 +28,12 @@
   <div class="box">
     <h1><span class="dot" id="d"></span><span id="msg">Waiting for the ExfilTrap detection service…</span></h1>
     <p>This desktop app is the monitor for the ExfilTrap detection service.
-       It switches to the dashboard automatically as soon as the service is
-       running on <code>127.0.0.1:5050</code>.</p>
-    <p><b>Start the detection engine</b> — one click, one root prompt.
-       The internet interface is detected automatically; override only if
-       you need a specific one:</p>
+       It starts the bundled engine automatically (one root prompt) and
+       switches to the dashboard once it is running on
+       <code>127.0.0.1:5050</code>.</p>
+    <p>If auto-start was declined, or you need a specific interface,
+       <b>start the engine manually</b> — one click, one root prompt.
+       The internet interface is detected automatically otherwise:</p>
     <div style="display:flex; gap:.5rem; justify-content:center; margin:.6rem 0 1rem">
       <input id="iface" placeholder="auto-detect (recommended)" spellcheck="false"
              style="background:#121821;border:1px solid #212b38;color:#c9d1d9;

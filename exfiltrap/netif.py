@@ -31,6 +31,27 @@ def default_interface() -> str | None:
     return _linux_default()
 
 
+def _run_powershell(script: str, timeout: int = 15):
+    """Run a PowerShell snippet and return its stdout, or "".
+
+    Windows PowerShell 5.1 ships as ``powershell``; PowerShell 7+ ships as
+    ``pwsh`` and some hardened/Server Core images only have one of the two,
+    so try both before giving up. Never raises — detection must not crash
+    the caller.
+    """
+    for exe in ("powershell", "pwsh"):
+        try:
+            out = subprocess.run(
+                [exe, "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True, text=True, timeout=timeout)
+            text = (out.stdout or "").strip()
+            if text:
+                return text
+        except Exception:  # noqa: BLE001
+            continue
+    return ""
+
+
 def _linux_default() -> str | None:
     # /proc/net/route: a row with Destination 00000000 is the default route.
     try:
@@ -55,32 +76,25 @@ def _linux_default() -> str | None:
 
 
 def _windows_default() -> str | None:
-    try:
-        ps = ("(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | "
-              "Sort-Object RouteMetric | Select-Object -First 1 | "
-              "Get-NetAdapter).Name")
-        out = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps],
-            capture_output=True, text=True, timeout=15)
-        if out.stdout.strip():
-            return out.stdout.strip()
-    except Exception:  # noqa: BLE001
-        pass
-    return None
+    ps = ("(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | "
+          "Sort-Object RouteMetric | Select-Object -First 1 | "
+          "Get-NetAdapter).Name")
+    name = _run_powershell(ps)
+    if not name:
+        # Fallback for hosts without the NetTCPIP module (rare, Server Core).
+        ps_alt = ("(Get-NetIPConfiguration | Where-Object "
+                  "{ $_.NetProfile.IPv4Connectivity -eq 'Internet' } | "
+                  "Select-Object -First 1).InterfaceAlias")
+        name = _run_powershell(ps_alt)
+    return name or None
 
 
 def list_interfaces() -> list[str]:
     """All non-loopback interfaces, for the 'could not detect' message."""
     if platform.system() == "Windows":
-        try:
-            ps = "(Get-NetAdapter | Where-Object Status -eq 'Up').Name"
-            out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps],
-                capture_output=True, text=True, timeout=15)
-            return [line.strip() for line in out.stdout.splitlines()
-                    if line.strip()]
-        except Exception:  # noqa: BLE001
-            return []
+        text = _run_powershell(
+            "(Get-NetAdapter | Where-Object Status -eq 'Up').Name")
+        return [ln.strip() for ln in text.splitlines() if ln.strip()]
     try:
         with open("/proc/net/dev") as fh:
             names = [line.split(":")[0].strip()
@@ -153,16 +167,10 @@ def system_nameservers() -> set[str]:
     """
     servers: set[str] = set()
     if platform.system() == "Windows":
-        try:
-            out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "(Get-DnsClientServerAddress -AddressFamily IPv4 | "
-                 "Select-Object -ExpandProperty ServerAddresses)"],
-                capture_output=True, text=True, timeout=15)
-            servers |= {ln.strip() for ln in out.stdout.splitlines()
-                        if _is_ip(ln.strip())}
-        except Exception:  # noqa: BLE001 — detection must never crash setup
-            pass
+        text = _run_powershell(
+            "(Get-DnsClientServerAddress -AddressFamily IPv4 | "
+            "Select-Object -ExpandProperty ServerAddresses)")
+        servers |= {ln.strip() for ln in text.splitlines() if _is_ip(ln.strip())}
         return servers
     try:
         with open("/etc/resolv.conf") as fh:

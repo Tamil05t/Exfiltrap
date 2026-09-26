@@ -1,0 +1,1952 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ExfilTrap — DNS Exfiltration Defense Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+/* ============================================================
+   ExfilTrap Console — design tokens
+   Severity is triple-encoded: color + shape + label (see .risk-*)
+   ============================================================ */
+:root {
+  color-scheme: dark;
+  --bg:#080b14; --side:#0b1020; --panel:#0f1526; --panel-2:#0c1120;
+  --panel-3:#121a2e; --raised:#151d33;
+  --border:#1d2740; --border-soft:#151d2e; --border-strong:#2a3757;
+  --text:#e2e8f4; --dim:#8492ac; --faint:#56617c; --ghost:#3a445c;
+  --accent:#4f8ff7; --accent-soft:rgba(79,143,247,.14); --accent-line:rgba(79,143,247,.3);
+  --lvl-low:#6b7a99; --lvl-low-soft:rgba(107,122,153,.14);
+  --lvl-med:#e2a336; --lvl-med-soft:rgba(226,163,54,.14);
+  --lvl-high:#f4794a; --lvl-high-soft:rgba(244,121,74,.15);
+  --lvl-conf:#f0403a; --lvl-conf-soft:rgba(240,64,58,.16);
+  --ok:#3fc46a; --ok-soft:rgba(63,196,106,.14);
+  --warn:#e2a336; --bad:#f0403a;
+  --cyan:#39c5cf; --purple:#a78bfa; --purple-soft:rgba(167,139,250,.15);
+  --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans:"Inter",ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;
+  --r-sm:6px; --r:9px; --r-lg:13px;
+  --shadow:0 10px 34px rgba(0,0,0,.42);
+  --shadow-sm:0 2px 10px rgba(0,0,0,.3);
+  --row-h:34px;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg:#eef1f7; --side:#f7f9fc; --panel:#ffffff; --panel-2:#f2f5fa;
+  --panel-3:#eaeef6; --raised:#ffffff;
+  --border:#d7deea; --border-soft:#e4e9f2; --border-strong:#c2ccdd;
+  --text:#16202f; --dim:#5b6880; --faint:#8794a8; --ghost:#aeb9c9;
+  --accent:#2563eb; --accent-soft:rgba(37,99,235,.1); --accent-line:rgba(37,99,235,.28);
+  --lvl-low:#5b6880; --lvl-low-soft:rgba(91,104,128,.1);
+  --lvl-med:#b8770d; --lvl-med-soft:rgba(184,119,13,.12);
+  --lvl-high:#c9500f; --lvl-high-soft:rgba(201,80,15,.12);
+  --lvl-conf:#c92a1f; --lvl-conf-soft:rgba(201,42,31,.12);
+  --ok:#158a45; --ok-soft:rgba(21,138,69,.1);
+  --warn:#b8770d; --bad:#c92a1f;
+  --cyan:#0b8b96; --purple:#6d4fd6; --purple-soft:rgba(109,79,214,.12);
+  --shadow:0 10px 30px rgba(30,45,80,.14);
+  --shadow-sm:0 2px 8px rgba(30,45,80,.1);
+}
+* { box-sizing:border-box; }
+html,body { height:100%; }
+body { margin:0; font-family:var(--sans); font-size:13px; line-height:1.45;
+       background:var(--bg); color:var(--text); overflow:hidden;
+       -webkit-font-smoothing:antialiased; }
+.mono { font-family:var(--mono); }
+.num { font-family:var(--mono); font-variant-numeric:tabular-nums; text-align:right; }
+button { font-family:inherit; font-size:inherit; color:inherit; cursor:pointer; }
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-thumb { background:var(--border-strong); border-radius:8px;
+  border:2px solid transparent; background-clip:content-box; }
+::-webkit-scrollbar-thumb:hover { background:var(--faint); background-clip:content-box; }
+::-webkit-scrollbar-track { background:transparent; }
+:focus-visible { outline:2px solid var(--accent); outline-offset:1px; border-radius:4px; }
+
+/* ===================== app shell ===================== */
+.app { display:grid; grid-template-columns:236px 1fr; grid-template-rows:46px 1fr 30px;
+       height:100dvh; }
+.statusbar { grid-column:1 / -1; }
+
+/* ===================== status bar ===================== */
+.statusbar { display:flex; align-items:center; gap:8px; padding:0 14px;
+             background:var(--side); border-bottom:1px solid var(--border);
+             font-size:11.5px; }
+.statusbar .brand { display:flex; align-items:center; gap:9px; font-weight:700;
+                    letter-spacing:.02em; font-size:13.5px; margin-right:6px; }
+.brand-badge { width:24px; height:24px; border-radius:7px; flex:none;
+  background:linear-gradient(135deg,#2563eb,#4f8ff7); display:grid; place-items:center;
+  box-shadow:0 3px 12px rgba(37,99,235,.4); }
+.statusbar .sep { width:1px; height:20px; background:var(--border); flex:none; }
+.sb-item { display:flex; align-items:center; gap:6px; color:var(--dim);
+           white-space:nowrap; }
+.sb-item b { color:var(--text); font-weight:600; font-family:var(--mono);
+             font-variant-numeric:tabular-nums; }
+.sb-spacer { flex:1; }
+.live-dot { width:8px; height:8px; border-radius:50%; background:var(--ok); flex:none;
+            box-shadow:0 0 0 0 var(--ok); animation:pulse 2.2s infinite; }
+.live-dot.warn { background:var(--warn); animation:none; }
+.live-dot.bad  { background:var(--bad); animation:none; }
+.live-dot.idle { background:var(--faint); animation:none; }
+@keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(63,196,106,.5);}
+                   70%{box-shadow:0 0 0 7px rgba(63,196,106,0);}
+                   100%{box-shadow:0 0 0 0 rgba(63,196,106,0);} }
+.chip { display:inline-flex; align-items:center; gap:6px; padding:3px 9px;
+        border:1px solid var(--border); border-radius:20px; background:var(--panel-2);
+        color:var(--dim); font-size:11px; font-weight:600; }
+.chip.live { border-color:var(--accent-line); background:var(--accent-soft);
+             color:var(--accent); }
+.chip.warn { border-color:rgba(226,163,54,.4); background:var(--lvl-med-soft);
+             color:var(--warn); }
+.chip.bad  { border-color:rgba(240,64,58,.42); background:var(--lvl-conf-soft);
+             color:var(--bad); }
+
+/* ===================== nav rail ===================== */
+.rail { background:var(--side); border-right:1px solid var(--border);
+        display:flex; flex-direction:column; padding:12px 10px; gap:3px;
+        overflow-y:auto; min-height:0; }
+.rail-label { color:var(--faint); font-size:9.5px; font-weight:700;
+              letter-spacing:.15em; text-transform:uppercase; padding:16px 10px 6px; }
+.rail-label:first-child { padding-top:4px; }
+.nav { display:flex; align-items:center; gap:11px; padding:8px 10px; border-radius:var(--r);
+       color:var(--dim); font-weight:500; border:1px solid transparent;
+       user-select:none; text-decoration:none; position:relative; }
+.nav:hover { color:var(--text); background:var(--panel-2); }
+.nav.is-active { color:var(--text); background:var(--accent-soft); border-color:var(--accent-line); }
+.nav.is-active .ico { color:var(--accent); }
+.nav .ico { width:17px; display:grid; place-items:center; color:var(--dim); flex:none; }
+.nav .ico svg { width:16px; height:16px; }
+.nav .count { margin-left:auto; font-size:10.5px; font-weight:700; font-family:var(--mono);
+  background:var(--panel-3); color:var(--dim); padding:1px 7px; border-radius:20px;
+  min-width:20px; text-align:center; font-variant-numeric:tabular-nums; }
+.nav .count.hot { background:var(--lvl-conf-soft); color:var(--lvl-conf); }
+.nav .count.warn { background:var(--lvl-med-soft); color:var(--lvl-med); }
+.engine-card { margin-top:auto; padding:11px; border:1px solid var(--border);
+  border-radius:var(--r); background:var(--panel-2); }
+.engine-card .row { display:flex; justify-content:space-between; gap:8px; font-size:11px;
+  padding:2.5px 0; }
+.engine-card .row span:first-child { color:var(--faint); }
+.engine-card .row span:last-child { font-family:var(--mono); color:var(--text);
+  font-variant-numeric:tabular-nums; text-align:right; }
+.engine-card .head { display:flex; align-items:center; gap:7px; font-size:11px;
+  font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--dim);
+  margin-bottom:7px; }
+
+/* ===================== main ===================== */
+.main { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--bg); }
+.topbar { display:flex; align-items:center; gap:12px; padding:11px 18px;
+          border-bottom:1px solid var(--border-soft); flex:none; }
+.topbar .titles h1 { margin:0; font-size:16px; font-weight:650; letter-spacing:.01em; }
+.topbar .titles p { margin:1px 0 0; font-size:11.5px; color:var(--faint); }
+.topbar .grow { flex:1; }
+.searchbox { display:flex; align-items:center; gap:8px; background:var(--panel-2);
+  border:1px solid var(--border); border-radius:var(--r); padding:6px 11px; width:270px;
+  color:var(--dim); }
+.searchbox:focus-within { border-color:var(--accent-line); background:var(--panel); }
+.searchbox input { flex:1; border:0; background:transparent; color:var(--text);
+  font-family:var(--mono); font-size:12px; outline:none; }
+.searchbox kbd { font-family:var(--mono); font-size:9.5px; color:var(--faint);
+  border:1px solid var(--border); border-radius:4px; padding:1px 5px; }
+
+.btn { display:inline-flex; align-items:center; gap:6px; padding:6px 11px;
+  border:1px solid var(--border); border-radius:var(--r); background:var(--panel-2);
+  color:var(--dim); font-weight:600; font-size:12px; white-space:nowrap;
+  transition:background .12s,border-color .12s,color .12s; text-decoration:none; }
+.btn:hover { color:var(--text); background:var(--panel-3); border-color:var(--border-strong); }
+.btn.mini { padding:3px 8px; font-size:11px; border-radius:6px; }
+.btn.primary { background:var(--accent-soft); border-color:var(--accent-line); color:var(--accent); }
+.btn.primary:hover { background:rgba(79,143,247,.22); color:#a9c8ff; }
+.btn.danger { color:var(--bad); border-color:rgba(240,64,58,.34);
+  background:var(--lvl-conf-soft); }
+.btn.danger:hover { background:rgba(240,64,58,.22); }
+.btn svg { width:14px; height:14px; }
+.btn[disabled] { opacity:.45; pointer-events:none; }
+
+.viewport { flex:1; overflow-y:auto; min-height:0; padding:18px; }
+.view { display:none; }
+.view.is-active { display:block; animation:viewin .22s ease; }
+@keyframes viewin { from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:none;} }
+
+/* ===================== posture banner ===================== */
+.posture { display:none; align-items:center; gap:13px; padding:11px 18px;
+  border-radius:var(--r); margin-bottom:16px; border:1px solid; }
+.posture.show { display:flex; }
+.posture.elevated { background:var(--lvl-med-soft); border-color:rgba(226,163,54,.38); }
+.posture.critical { background:var(--lvl-conf-soft); border-color:rgba(240,64,58,.42); }
+.posture .pico { width:34px; height:34px; border-radius:9px; display:grid;
+  place-items:center; flex:none; background:var(--panel); }
+.posture.critical .pico { color:var(--bad); }
+.posture.elevated .pico { color:var(--warn); }
+.posture .ptext b { display:block; font-size:13.5px; }
+.posture .ptext span { font-size:11.5px; color:var(--dim); }
+.posture .pactions { margin-left:auto; display:flex; gap:8px; }
+
+/* ===================== cards / grids ===================== */
+.grid { display:grid; gap:14px; }
+.kpis { grid-template-columns:repeat(6,1fr); margin-bottom:16px; }
+.kpis.four { grid-template-columns:repeat(4,1fr); }
+.cols-2 { grid-template-columns:1.55fr 1fr; }
+.cols-2b { grid-template-columns:1fr 1fr; }
+@media (max-width:1200px){ .kpis{grid-template-columns:repeat(3,1fr);}
+  .cols-2,.cols-2b{grid-template-columns:1fr;} }
+@media (max-width:820px){ .kpis{grid-template-columns:repeat(2,1fr);} }
+
+.card { background:var(--panel); border:1px solid var(--border); border-radius:var(--r-lg);
+        overflow:hidden; }
+.card-head { display:flex; align-items:center; gap:10px; padding:11px 14px;
+  border-bottom:1px solid var(--border-soft); }
+.card-head h3 { margin:0; font-size:12.5px; font-weight:650; }
+.card-head .sub { font-size:10.5px; color:var(--faint); }
+.card-head .grow { flex:1; }
+.card-body { padding:13px 14px; }
+
+.stat { background:var(--panel); border:1px solid var(--border); border-radius:var(--r-lg);
+  padding:12px 14px; position:relative; overflow:hidden; cursor:default; }
+.stat.clickable { cursor:pointer; transition:border-color .12s,transform .12s; }
+.stat.clickable:hover { border-color:var(--border-strong); transform:translateY(-1px); }
+.stat::after { content:""; position:absolute; inset:0 0 auto 0; height:2px;
+  background:var(--accent); opacity:.6; }
+.stat.tone-conf::after { background:var(--lvl-conf); opacity:1; }
+.stat.tone-high::after { background:var(--lvl-high); }
+.stat.tone-med::after  { background:var(--lvl-med); }
+.stat.tone-ok::after   { background:var(--ok); }
+.stat .k { font-size:10px; font-weight:700; letter-spacing:.11em; text-transform:uppercase;
+  color:var(--faint); }
+.stat .v { font-size:25px; font-weight:650; font-family:var(--mono);
+  font-variant-numeric:tabular-nums; margin:5px 0 1px; letter-spacing:-.01em; }
+.stat .d { font-size:11px; color:var(--dim); }
+.stat .d .up { color:var(--lvl-conf); font-weight:600; }
+.stat .d .ok { color:var(--ok); font-weight:600; }
+.stat .spark { position:absolute; right:11px; bottom:9px; opacity:.5; }
+
+/* ===================== tables ===================== */
+.tbl-wrap { overflow:auto; max-height:calc(100dvh - 300px); }
+table.tbl { width:100%; border-collapse:collapse; font-size:12px; }
+.tbl thead th { position:sticky; top:0; z-index:2; text-align:left; padding:8px 12px;
+  background:var(--panel-2); color:var(--faint); font-size:10px; font-weight:700;
+  letter-spacing:.09em; text-transform:uppercase; border-bottom:1px solid var(--border);
+  white-space:nowrap; user-select:none; }
+.tbl thead th.sortable { cursor:pointer; }
+.tbl thead th.sortable:hover { color:var(--dim); }
+.tbl thead th .arrow { opacity:.45; font-size:9px; }
+.tbl thead th.sorted { color:var(--accent); }
+.tbl tbody tr { border-bottom:1px solid var(--border-soft); height:var(--row-h); }
+.tbl tbody tr:hover { background:var(--panel-2); }
+.tbl tbody tr.sel { background:var(--accent-soft); }
+.tbl tbody tr.flash { animation:flash 1.1s ease-out; }
+@keyframes flash { from{background:var(--accent-soft);} to{background:transparent;} }
+.tbl td { padding:6px 12px; vertical-align:middle; white-space:nowrap; }
+.tbl td.wrap { white-space:normal; }
+.tbl td.muted { color:var(--dim); }
+.tbl .empty { text-align:center; color:var(--faint); padding:34px 12px; font-style:italic; }
+.compact { --row-h:27px; }
+.compact .tbl td { padding:3px 12px; }
+.qname { font-family:var(--mono); max-width:340px; overflow:hidden;
+  text-overflow:ellipsis; cursor:pointer; }
+.qname:hover { color:var(--accent); text-decoration:underline dotted; }
+.trunc { max-width:220px; overflow:hidden; text-overflow:ellipsis; }
+
+/* severity rail: left edge bar encodes the risk regardless of color vision */
+.sev { position:relative; }
+.sev::before { content:""; position:absolute; left:0; top:0; bottom:0; width:3px;
+  background:transparent; }
+.sev.LOW::before { background:var(--lvl-low); }
+.sev.MEDIUM::before { background:var(--lvl-med); }
+.sev.HIGH::before { background:var(--lvl-high); }
+.sev.CONFIRMED::before { background:var(--lvl-conf); }
+
+/* risk badge — color + SHAPE + label (triple-encoded) */
+.risk { display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:700;
+  letter-spacing:.05em; padding:2px 8px 2px 7px; border-radius:5px; border:1px solid; }
+.risk .glyph { width:9px; height:9px; flex:none; }
+.risk-LOW { color:var(--lvl-low); border-color:rgba(107,122,153,.45); background:var(--lvl-low-soft); }
+.risk-MEDIUM { color:var(--lvl-med); border-color:rgba(226,163,54,.45); background:var(--lvl-med-soft); }
+.risk-HIGH { color:var(--lvl-high); border-color:rgba(244,121,74,.5); background:var(--lvl-high-soft); }
+.risk-CONFIRMED { color:#fff; border-color:var(--lvl-conf); background:var(--lvl-conf); }
+:root[data-theme="light"] .risk-CONFIRMED { color:#fff; }
+.glyph-LOW { background:currentColor; border-radius:50%; }
+.glyph-MEDIUM { background:transparent; border:1.6px solid currentColor; }
+.glyph-HIGH { background:transparent; border:1.6px solid currentColor;
+  clip-path:polygon(50% 0,100% 100%,0 100%); border-radius:1px; }
+.glyph-CONFIRMED { background:currentColor;
+  clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%); border-radius:0; }
+
+/* tags / chips */
+.tag { display:inline-flex; align-items:center; font-size:9.5px; font-weight:700;
+  letter-spacing:.05em; padding:1px 6px; border-radius:4px; border:1px solid;
+  background:var(--panel-2); color:var(--dim); text-transform:uppercase; }
+.tag.canary { color:var(--purple); border-color:rgba(167,139,250,.4); background:var(--purple-soft); }
+.tag.mitre { color:var(--cyan); border-color:rgba(57,197,207,.38);
+  background:rgba(57,197,207,.1); font-family:var(--mono); }
+.tag.src { color:var(--dim); }
+.tag.sink { color:var(--lvl-high); border-color:rgba(244,121,74,.4);
+  background:var(--lvl-high-soft); }
+.tag.bypass { color:var(--warn); border-color:rgba(226,163,54,.4); background:var(--lvl-med-soft); }
+.flag { display:inline-flex; align-items:center; font-size:9.5px; font-weight:700;
+  padding:1px 6px; border-radius:4px; color:#fff; }
+.flag.vel { background:#b0561f; } .flag.beacon { background:#8a4fd6; }
+.flag.mass { background:#2b6cb0; } .flag.resp { background:#0b8b96; }
+.proc { color:var(--text); font-family:var(--mono); font-size:11.5px; }
+.proc.none { color:var(--faint); font-style:italic; }
+.faint { color:var(--faint); }
+.muted { color:var(--dim); }
+.pillnone { color:var(--ghost); }
+
+/* ===================== split (list + detail) ===================== */
+.split { display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:14px;
+  align-items:start; }
+@media (max-width:1100px){ .split{grid-template-columns:1fr;} }
+@media (max-width:1500px){ .split{grid-template-columns:minmax(0,1fr) 320px;} }
+
+/* ===================== detail drawer ===================== */
+.drawer { position:fixed; top:0; right:0; bottom:0; width:440px; max-width:92vw;
+  background:var(--panel); border-left:1px solid var(--border); box-shadow:var(--shadow);
+  transform:translateX(101%); transition:transform .24s cubic-bezier(.3,.7,.3,1);
+  z-index:60; display:flex; flex-direction:column; }
+.drawer.open { transform:none; }
+.drawer .d-head { display:flex; align-items:center; gap:10px; padding:13px 16px;
+  border-bottom:1px solid var(--border); }
+.drawer .d-head h3 { margin:0; font-size:13px; flex:1; }
+.drawer .d-body { overflow-y:auto; padding:0 16px 24px; }
+dl.kv { display:grid; grid-template-columns:104px 1fr; gap:7px 12px; margin:14px 0 0;
+  font-size:12px; }
+dl.kv dt { color:var(--faint); font-size:10.5px; text-transform:uppercase;
+  letter-spacing:.06em; font-weight:700; padding-top:2px; }
+dl.kv dd { margin:0; font-family:var(--mono); word-break:break-word;
+  font-variant-numeric:tabular-nums; }
+.code { background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r);
+  padding:11px 13px; font-family:var(--mono); font-size:11.5px; white-space:pre-wrap;
+  word-break:break-word; margin-top:7px; color:#9ee493; line-height:1.55; }
+:root[data-theme="light"] .code { color:#0f6b3a; }
+.sec-title { font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--faint); margin:18px 0 2px; }
+
+/* ===================== feed controls ===================== */
+.controls { display:flex; align-items:center; gap:9px; padding:10px 14px;
+  border-bottom:1px solid var(--border-soft); flex-wrap:wrap; }
+.controls .grow { flex:1; }
+.seg { display:inline-flex; border:1px solid var(--border); border-radius:var(--r);
+  overflow:hidden; background:var(--panel-2); }
+.seg button { border:0; background:transparent; color:var(--dim); padding:5px 12px;
+  font-size:11.5px; font-weight:600; border-right:1px solid var(--border-soft); }
+.seg button:last-child { border-right:0; }
+.seg button.on { background:var(--accent-soft); color:var(--accent); }
+.seg button:hover:not(.on) { background:var(--panel-3); color:var(--text); }
+select.inp, input.inp { background:var(--panel-2); border:1px solid var(--border);
+  border-radius:var(--r); color:var(--text); padding:5px 9px; font-family:var(--mono);
+  font-size:11.5px; outline:none; }
+select.inp:focus, input.inp:focus { border-color:var(--accent-line); }
+select.inp { cursor:pointer; }
+
+.newbar { display:none; align-items:center; justify-content:center; gap:8px;
+  padding:6px; background:var(--accent); color:#fff; font-weight:600; font-size:12px;
+  cursor:pointer; border-radius:0 0 var(--r) var(--r); }
+.newbar.show { display:flex; animation:viewin .2s; }
+
+/* ===================== charts ===================== */
+.chart-box { position:relative; height:230px; }
+.chart-box.sm { height:172px; }
+
+/* ===================== bar lists ===================== */
+.barlist .kt { padding:8px 0; border-bottom:1px solid var(--border-soft); }
+.barlist .kt:last-child { border-bottom:0; }
+.barlist .kt .t { display:flex; justify-content:space-between; gap:10px;
+  font-size:12px; margin-bottom:5px; }
+.barlist .kt .t b { font-family:var(--mono); font-weight:600; cursor:pointer; }
+.barlist .kt .t b:hover { color:var(--accent); }
+.bar { height:6px; border-radius:4px; background:var(--panel-3); overflow:hidden; }
+.bar i { display:block; height:100%; border-radius:4px;
+  background:linear-gradient(90deg,var(--accent),#6aa4ff); }
+.bar i.hot { background:linear-gradient(90deg,var(--lvl-high),var(--lvl-conf)); }
+
+/* ===================== list rows (allowlist/mute/sinks) ===================== */
+.rowlist { display:flex; flex-direction:column; gap:5px; }
+.rowitem { display:flex; align-items:center; gap:9px; padding:6px 9px; font-size:12px;
+  background:var(--panel-2); border:1px solid var(--border-soft); border-radius:7px; }
+.rowitem .mono { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rowitem .x { margin-left:auto; color:var(--faint); background:none; border:0;
+  padding:2px 5px; border-radius:5px; font-size:13px; line-height:1; }
+.rowitem .x:hover { color:var(--bad); background:var(--lvl-conf-soft); }
+
+/* ===================== toast ===================== */
+.toasts { position:fixed; bottom:20px; right:20px; display:flex; flex-direction:column;
+  gap:9px; z-index:90; }
+.toast { background:var(--raised); border:1px solid var(--border-strong);
+  border-left:3px solid var(--accent); border-radius:var(--r); padding:11px 15px;
+  box-shadow:var(--shadow); font-size:12.5px; min-width:230px; max-width:360px;
+  animation:toastin .22s ease; }
+.toast.ok { border-left-color:var(--ok); } .toast.err { border-left-color:var(--bad); }
+@keyframes toastin { from{opacity:0; transform:translateX(24px);} to{opacity:1; transform:none;} }
+
+/* ===================== modal / confirm ===================== */
+.modal-bg { position:fixed; inset:0; background:rgba(4,7,14,.62); backdrop-filter:blur(3px);
+  display:none; z-index:80; align-items:flex-start; justify-content:center; padding-top:13vh; }
+.modal-bg.open { display:flex; }
+.modal { background:var(--panel); border:1px solid var(--border-strong);
+  border-radius:var(--r-lg); box-shadow:var(--shadow); width:520px; max-width:92vw;
+  animation:viewin .2s; }
+.modal h3 { margin:0; padding:15px 18px 0; font-size:15px; }
+.modal p { margin:9px 18px; color:var(--dim); font-size:12.5px; }
+.modal .acts { display:flex; justify-content:flex-end; gap:9px; padding:14px 18px; }
+
+/* command palette */
+.palette { width:560px; }
+.palette input { width:100%; border:0; border-bottom:1px solid var(--border);
+  background:transparent; color:var(--text); font-size:15px; padding:15px 18px;
+  outline:none; font-family:var(--mono); }
+.palette .results { max-height:380px; overflow-y:auto; padding:6px; }
+.palette .res { display:flex; align-items:center; gap:11px; padding:9px 12px;
+  border-radius:var(--r); cursor:pointer; }
+.palette .res:hover, .palette .res.on { background:var(--accent-soft); }
+.palette .res .ric { color:var(--dim); width:17px; }
+.palette .res .rmain { flex:1; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; font-family:var(--mono); font-size:12.5px; }
+.palette .res .rkind { font-size:10px; color:var(--faint); text-transform:uppercase;
+  letter-spacing:.06em; }
+
+/* ===================== footer ticker ===================== */
+.ticker { grid-column:1 / -1; display:flex; align-items:center; gap:0;
+  background:var(--side); border-top:1px solid var(--border); font-size:11px;
+  color:var(--dim); overflow:hidden; padding:0 14px; }
+.ticker .tk { display:flex; align-items:center; gap:7px; white-space:nowrap;
+  padding:0 14px; border-right:1px solid var(--border-soft); height:100%; }
+.ticker .tk b { color:var(--text); font-family:var(--mono); font-weight:600; }
+.ticker .tk.alert b { color:var(--lvl-high); }
+.ticker .grow { flex:1; }
+.ticker .ver { color:var(--faint); }
+
+/* ===================== misc ===================== */
+.empty-state { display:flex; flex-direction:column; align-items:center; gap:7px;
+  padding:40px 16px; color:var(--faint); text-align:center; }
+.empty-state svg { width:30px; height:30px; opacity:.4; }
+.empty-state b { color:var(--dim); font-size:13px; }
+.empty-state span { font-size:11.5px; max-width:340px; }
+.err-state { display:flex; align-items:center; gap:9px; padding:13px 15px;
+  background:var(--lvl-conf-soft); border:1px solid rgba(240,64,58,.35);
+  border-radius:var(--r); color:var(--dim); font-size:12px; }
+.err-state svg { color:var(--bad); flex:none; }
+.err-state .btn { margin-left:auto; }
+.kv-mini { display:grid; grid-template-columns:auto 1fr; gap:5px 14px; font-size:12px; }
+.kv-mini dt { color:var(--faint); font-size:11px; }
+.kv-mini dd { margin:0; font-family:var(--mono); word-break:break-word; }
+.hint { font-size:11px; color:var(--faint); }
+.copyable { cursor:copy; }
+.copyable:hover { color:var(--accent); }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ============ status bar ============ -->
+  <header class="statusbar" id="statusbar">
+    <div class="brand">
+      <span class="brand-badge">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff"
+             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/>
+          <path d="M9.5 12.5l1.8 1.8 3.5-3.6"/>
+        </svg>
+      </span>
+      ExfilTrap
+    </div>
+    <div class="sep"></div>
+    <div class="sb-item"><span class="live-dot idle" id="sb-cap-dot"></span>
+      <span id="sb-cap">capture —</span></div>
+    <div class="sep"></div>
+    <div class="sb-item">mode <b id="sb-mode">—</b></div>
+    <div class="sep"></div>
+    <div class="sb-item">uptime <b id="sb-uptime">—</b></div>
+    <div class="sep"></div>
+    <div class="sb-item">seen <b id="sb-queries">0</b></div>
+    <div class="sb-spacer"></div>
+    <button class="chip live" id="sse-chip" title="live stream status">
+      <span class="live-dot" id="sse-dot" style="width:6px;height:6px"></span>
+      <span id="sse-state">connecting</span>
+    </button>
+    <button class="btn mini" id="pause-btn" title="Pause live updates (space)">Pause</button>
+    <button class="btn mini" id="theme-btn" title="Toggle light / dark">Theme</button>
+  </header>
+
+  <!-- ============ nav rail ============ -->
+  <nav class="rail" id="rail">
+    <div class="rail-label">Monitor</div>
+    <a class="nav" data-nav="overview" href="#/overview">
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="9" rx="1.4"/><rect x="14" y="3" width="7" height="5" rx="1.4"/>
+        <rect x="14" y="12" width="7" height="9" rx="1.4"/><rect x="3" y="16" width="7" height="5" rx="1.4"/>
+      </svg></span>Overview</a>
+    <a class="nav" data-nav="triage" href="#/triage/events">
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 12h4l2-7 4 14 2-7h6"/>
+      </svg></span>Triage <span class="count" id="nav-triage">0</span></a>
+    <a class="nav" data-nav="response" href="#/response/ledger">
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M12 9v4"/><path d="M12 16h.01"/>
+      </svg></span>Response <span class="count" id="nav-response">0</span></a>
+    <div class="rail-label">System</div>
+    <a class="nav" data-nav="system" href="#/system">
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3.2"/>
+        <path d="M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1 1.56V21a2 2 0 11-4 0v-.09A1.7 1.7 0 008 19.4a1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.7 1.7 0 003.6 15a1.7 1.7 0 00-1.56-1H2a2 2 0 110-4h.09A1.7 1.7 0 003.6 9a1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06A1.7 1.7 0 008 4.6h.09A1.7 1.7 0 009 3.09V3a2 2 0 114 0v.09a1.7 1.7 0 001 1.56 1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06A1.7 1.7 0 0020.4 9v.09a1.7 1.7 0 001.56 1H22a2 2 0 110 4h-.09a1.7 1.7 0 00-1.56 1z"/>
+      </svg></span>System</a>
+    <a class="nav" data-nav="about" href="#/about" style="display:none"></a>
+
+    <div class="engine-card" id="engine-card">
+      <div class="head"><span class="live-dot idle" id="eng-dot"></span>
+        <span id="eng-state">engine</span></div>
+      <div class="row"><span>mode</span><span id="eng-mode">—</span></div>
+      <div class="row"><span>uptime</span><span id="eng-uptime">—</span></div>
+      <div class="row"><span>heartbeat</span><span id="eng-hb">—</span></div>
+      <div class="row"><span>privileges</span><span id="eng-priv">—</span></div>
+    </div>
+  </nav>
+
+  <!-- ============ main ============ -->
+  <main class="main">
+    <div class="topbar">
+      <div class="titles">
+        <h1 id="view-title">Security Overview</h1>
+        <p id="view-sub">Live DNS tunnelling &amp; exfiltration surveillance</p>
+      </div>
+      <div class="grow"></div>
+      <div class="searchbox" id="topsearch" title="Search or press ⌘K">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input id="global-search" placeholder="Search domain, IP, process…" spellcheck="false">
+        <kbd>⌘K</kbd>
+      </div>
+      <a class="btn" id="export-btn" href="/api/export?window=7200">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/>
+          <path d="M4 20h16"/></svg>Export</a>
+    </div>
+
+    <div class="viewport" id="viewport">
+      <div class="posture" id="posture">
+        <div class="pico" id="posture-ico"></div>
+        <div class="ptext"><b id="posture-title"></b><span id="posture-sub"></span></div>
+        <div class="pactions" id="posture-actions"></div>
+      </div>
+
+      <!-- ============ OVERVIEW ============ -->
+      <section class="view" id="view-overview">
+        <div class="grid kpis" id="ov-kpis"></div>
+        <div class="grid cols-2" style="margin-bottom:14px">
+          <div class="card">
+            <div class="card-head">
+              <h3>Traffic &amp; detections</h3>
+              <span class="sub" id="flow-sub">60s buckets</span>
+              <div class="grow"></div>
+              <div class="seg" id="range-seg">
+                <button data-range="300">5m</button>
+                <button data-range="1800">30m</button>
+                <button data-range="7200" class="on">2h</button>
+                <button data-range="86400">24h</button>
+              </div>
+            </div>
+            <div class="card-body"><div class="chart-box"><canvas id="chart-flow"></canvas></div></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Risk distribution</h3>
+              <span class="sub">verdict mix</span></div>
+            <div class="card-body"><div class="chart-box"><canvas id="chart-risk"></canvas></div></div>
+          </div>
+        </div>
+        <div class="grid cols-2b">
+          <div class="card">
+            <div class="card-head"><h3>Tunnel hunt</h3>
+              <span class="sub">flagged queries per base domain</span></div>
+            <div class="card-body barlist" id="tunnel-hunt"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Top talkers</h3>
+              <span class="sub">sources with flagged traffic</span></div>
+            <div class="card-body barlist" id="top-sources"></div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <div class="card-head"><h3>Latest alerts</h3>
+            <span class="sub">click a row for full evidence</span>
+            <div class="grow"></div>
+            <a class="btn mini" href="#/triage/events">Open Triage →</a></div>
+          <div class="tbl-wrap" style="max-height:330px">
+            <table class="tbl" id="mini-alerts"><thead><tr>
+              <th style="width:96px">Time</th><th>Query</th><th style="width:120px">Verdict</th>
+              <th>Signals</th></tr></thead><tbody></tbody></table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ TRIAGE ============ -->
+      <section class="view" id="view-triage">
+        <div class="controls">
+          <div class="seg" id="triage-mode">
+            <button data-mode="events" class="on">Events</button>
+            <button data-mode="sources">Sources</button>
+          </div>
+          <div class="grow"></div>
+          <div class="searchbox" style="width:220px">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <input id="triage-search" placeholder="filter…" spellcheck="false"></div>
+          <select class="inp" id="triage-risk">
+            <option value="">All risk</option><option value="CONFIRMED">Confirmed</option>
+            <option value="HIGH">High</option><option value="MEDIUM">Medium</option>
+            <option value="LOW">Low</option></select>
+          <select class="inp" id="triage-window">
+            <option value="0">All time</option><option value="300">Last 5m</option>
+            <option value="1800">Last 30m</option><option value="7200">Last 2h</option>
+            <option value="86400">Last 24h</option></select>
+          <button class="btn mini" id="triage-density" title="Toggle density">Compact</button>
+        </div>
+        <div id="triage-new" class="newbar">▲ <span id="new-count">0</span> new — click to show</div>
+
+        <div id="triage-events" class="split">
+          <div class="card">
+            <div class="tbl-wrap" style="max-height:calc(100dvh - 236px)">
+              <table class="tbl" id="events-table"><thead><tr>
+                <th class="sortable" data-sort="ts" style="width:92px">Time <span class="arrow"></span></th>
+                <th class="sortable" data-sort="qname">Query <span class="arrow"></span></th>
+                <th class="sortable" data-sort="src_ip" style="width:130px">Source <span class="arrow"></span></th>
+                <th class="sortable" data-sort="risk_level" style="width:124px">Verdict <span class="arrow"></span></th>
+                <th>Signals</th><th style="width:120px">Process</th>
+              </tr></thead><tbody></tbody></table>
+            </div>
+            <div style="padding:7px 14px;border-top:1px solid var(--border-soft);
+                        font-size:11px;color:var(--faint)" id="events-count"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Evidence</h3><span class="sub">select an event</span></div>
+            <div class="card-body" id="event-detail">
+              <div class="empty-state"><b>No event selected</b>
+                <span>Pick a row to see decoded payload, ATT&amp;CK mapping and detection reasons.</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="triage-sources" style="display:none">
+          <div class="card">
+            <div class="tbl-wrap" style="max-height:calc(100dvh - 236px)">
+              <table class="tbl" id="sources-table"><thead><tr>
+                <th class="sortable" data-sort="src_ip">Source <span class="arrow"></span></th>
+                <th class="sortable" data-sort="query_count" style="width:110px">Queries <span class="arrow"></span></th>
+                <th class="sortable" data-sort="flagged" style="width:100px">Flagged <span class="arrow"></span></th>
+                <th class="sortable" data-sort="mean_mass" style="width:120px">Mean mass <span class="arrow"></span></th>
+                <th class="sortable" data-sort="cumulative_mass" style="width:130px">Cum. mass <span class="arrow"></span></th>
+                <th class="sortable" data-sort="interval_cv" style="width:100px">IAT CV <span class="arrow"></span></th>
+                <th>Signals</th><th class="sortable" data-sort="last_seen" style="width:100px">Last seen <span class="arrow"></span></th>
+              </tr></thead><tbody></tbody></table>
+            </div>
+            <div style="padding:7px 14px;border-top:1px solid var(--border-soft);
+                        font-size:11px;color:var(--faint)" id="sources-count"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ RESPONSE ============ -->
+      <section class="view" id="view-response">
+        <div class="controls">
+          <div class="seg" id="response-mode">
+            <button data-mode="ledger" class="on">Ledger</button>
+            <button data-mode="policy">Traps &amp; policy</button>
+          </div>
+          <div class="grow"></div>
+          <span class="hint" id="resp-hint"></span>
+        </div>
+
+        <div id="response-ledger">
+          <div class="grid kpis four" id="resp-kpis" style="margin-bottom:14px"></div>
+          <div class="card">
+            <div class="card-head"><h3>Automated-response ledger</h3>
+              <span class="sub">source drops and domain sinks</span>
+              <div class="grow"></div>
+              <button class="btn mini danger" id="clear-sinks">Clear domain sinks</button></div>
+            <div class="tbl-wrap" style="max-height:calc(100dvh - 320px)">
+              <table class="tbl" id="resp-table"><thead><tr>
+                <th style="width:92px">Time</th><th style="width:130px">Kind</th><th>Target</th>
+                <th style="width:180px">Attribution</th><th>Details</th>
+                <th style="width:92px"></th></tr></thead><tbody></tbody></table>
+            </div>
+            <div style="padding:7px 14px;border-top:1px solid var(--border-soft);
+                        font-size:11px;color:var(--faint)" id="resp-count"></div>
+          </div>
+        </div>
+
+        <div id="response-policy" style="display:none">
+          <div class="grid cols-2b">
+            <div class="card">
+              <div class="card-head"><h3>Canary traps</h3>
+                <span class="sub" id="canary-hint"></span></div>
+              <div class="card-body">
+                <div class="rowlist" id="canary-list"></div>
+                <div class="sec-title">Tripped traps</div>
+                <div class="code" id="canary-hits"
+                     style="color:var(--purple)">no traps tripped — quiet is good</div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h3>Domain sinkhole</h3>
+                <span class="sub">hosts-file intercepts</span>
+                <div class="grow"></div>
+                <button class="btn mini danger" id="clear-sinks-2">Clear all</button></div>
+              <div class="card-body">
+                <div class="sec-title" style="margin-top:0">Armed sinks</div>
+                <div class="rowlist" id="sink-list"></div>
+                <div class="sec-title">Recent interceptions</div>
+                <div class="rowlist" id="sink-hits"></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h3>Allowlist</h3>
+                <span class="sub">sources never firewalled</span></div>
+              <div class="card-body">
+                <div style="display:flex;gap:8px;margin-bottom:11px">
+                  <input class="inp" id="al-ip" placeholder="10.0.0.5" style="flex:1"
+                         spellcheck="false">
+                  <button class="btn primary" id="al-add">Add</button></div>
+                <div class="rowlist" id="al-list"></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h3>Muted domains</h3>
+                <span class="sub">suppressed from alerting</span></div>
+              <div class="card-body">
+                <div style="display:flex;gap:8px;margin-bottom:11px">
+                  <input class="inp" id="mu-domain" placeholder="example.com" style="flex:1"
+                         spellcheck="false">
+                  <button class="btn primary" id="mu-add">Mute</button></div>
+                <div class="rowlist" id="mu-list"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ SYSTEM ============ -->
+      <section class="view" id="view-system">
+        <div class="grid cols-2b">
+          <div class="card">
+            <div class="card-head"><h3>Capture</h3>
+              <span class="sub">per-interface heartbeat</span></div>
+            <div class="card-body"><dl class="kv" id="svc-capture"></dl></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Engine</h3><span class="sub">runtime facts</span></div>
+            <div class="card-body"><dl class="kv" id="svc-engine"></dl></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Policy</h3><span class="sub">mitigation posture</span></div>
+            <div class="card-body"><dl class="kv" id="svc-policy"></dl></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Storage &amp; evidence</h3>
+              <span class="sub">database + export</span></div>
+            <div class="card-body">
+              <dl class="kv" id="svc-storage"></dl>
+              <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+                <a class="btn primary" href="/api/export?window=3600">Export 1h evidence</a>
+                <a class="btn" href="/api/export?window=86400">Export 24h</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ ABOUT (hidden route) ============ -->
+      <section class="view" id="view-about">
+        <div class="card"><div class="card-body">
+          <h3 style="margin-top:0">ExfilTrap</h3>
+          <p class="hint">Stateful DNS tunnelling &amp; slow-drip exfiltration detection.
+          Detection chain M1–M9 · Random Forest + stateful session layer · risk engine ·
+          policy mitigation.</p>
+        </div></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ============ footer ticker ============ -->
+  <footer class="ticker" id="ticker">
+    <span class="tk"><span class="live-dot idle" id="tick-capdot"></span>
+      capture <b id="tick-capture">—</b></span>
+    <span class="tk" id="tick-alertwrap">last alert <b id="tick-alert">none</b></span>
+    <span class="tk">sinkhole <b id="tick-sink">0 domains</b></span>
+    <span class="tk">hidden-engine <b id="tick-eng">—</b></span>
+    <span class="tk">clock <b id="tick-time">--:--:--</b></span>
+    <span class="grow"></span>
+    <span class="tk ver">ExfilTrap v2.0 · stateful DNS exfiltration defence</span>
+  </footer>
+</div>
+
+<!-- ============ detail drawer ============ -->
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="d-head"><h3 id="drawer-title">Detail</h3>
+    <button class="btn mini" id="drawer-close">Close ✕</button></div>
+  <div class="d-body" id="drawer-body"></div>
+</aside>
+
+<!-- ============ confirm modal ============ -->
+<div class="modal-bg" id="confirm-bg">
+  <div class="modal">
+    <h3 id="confirm-title">Confirm</h3>
+    <p id="confirm-msg"></p>
+    <div class="acts">
+      <button class="btn" id="confirm-no">Cancel</button>
+      <button class="btn danger" id="confirm-yes">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ command palette ============ -->
+<div class="modal-bg" id="palette-bg">
+  <div class="modal palette">
+    <input id="palette-input" placeholder="Jump to view, search a domain, IP or process…"
+           spellcheck="false" autocomplete="off">
+    <div class="results" id="palette-results"></div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+(function(){
+const MOCK={"stats": {"totals": {"queries": 128402, "flagged": 322, "confirmed": 7, "blocked": 3, "sinkhole_hits": 17}, "levels": {"LOW": 99000, "MEDIUM": 19000, "HIGH": 271, "CONFIRMED": 7}, "response_flags": 12, "timeseries": [{"bucket": 1790418319.8976035, "queries": 35, "flagged": 0}, {"bucket": 1790418379.8976035, "queries": 74, "flagged": 0}, {"bucket": 1790418439.8976035, "queries": 40, "flagged": 0}, {"bucket": 1790418499.8976035, "queries": 34, "flagged": 0}, {"bucket": 1790418559.8976035, "queries": 89, "flagged": 0}, {"bucket": 1790418619.8976035, "queries": 64, "flagged": 0}, {"bucket": 1790418679.8976035, "queries": 59, "flagged": 0}, {"bucket": 1790418739.8976035, "queries": 56, "flagged": 0}, {"bucket": 1790418799.8976035, "queries": 88, "flagged": 0}, {"bucket": 1790418859.8976035, "queries": 81, "flagged": 0}, {"bucket": 1790418919.8976035, "queries": 89, "flagged": 0}, {"bucket": 1790418979.8976035, "queries": 55, "flagged": 0}, {"bucket": 1790419039.8976035, "queries": 47, "flagged": 0}, {"bucket": 1790419099.8976035, "queries": 45, "flagged": 0}, {"bucket": 1790419159.8976035, "queries": 60, "flagged": 0}, {"bucket": 1790419219.8976035, "queries": 61, "flagged": 0}, {"bucket": 1790419279.8976035, "queries": 38, "flagged": 0}, {"bucket": 1790419339.8976035, "queries": 51, "flagged": 0}, {"bucket": 1790419399.8976035, "queries": 57, "flagged": 0}, {"bucket": 1790419459.8976035, "queries": 87, "flagged": 0}, {"bucket": 1790419519.8976035, "queries": 82, "flagged": 0}, {"bucket": 1790419579.8976035, "queries": 89, "flagged": 0}, {"bucket": 1790419639.8976035, "queries": 87, "flagged": 0}, {"bucket": 1790419699.8976035, "queries": 88, "flagged": 0}, {"bucket": 1790419759.8976035, "queries": 60, "flagged": 0}, {"bucket": 1790419819.8976035, "queries": 63, "flagged": 0}, {"bucket": 1790419879.8976035, "queries": 50, "flagged": 0}, {"bucket": 1790419939.8976035, "queries": 36, "flagged": 0}, {"bucket": 1790419999.8976035, "queries": 42, "flagged": 0}, {"bucket": 1790420059.8976035, "queries": 56, "flagged": 0}, {"bucket": 1790420119.8976035, "queries": 69, "flagged": 0}, {"bucket": 1790420179.8976035, "queries": 31, "flagged": 0}, {"bucket": 1790420239.8976035, "queries": 89, "flagged": 0}, {"bucket": 1790420299.8976035, "queries": 46, "flagged": 0}, {"bucket": 1790420359.8976035, "queries": 38, "flagged": 0}, {"bucket": 1790420419.8976035, "queries": 74, "flagged": 0}, {"bucket": 1790420479.8976035, "queries": 79, "flagged": 0}, {"bucket": 1790420539.8976035, "queries": 31, "flagged": 0}, {"bucket": 1790420599.8976035, "queries": 32, "flagged": 0}, {"bucket": 1790420659.8976035, "queries": 42, "flagged": 0}, {"bucket": 1790420719.8976035, "queries": 39, "flagged": 0}, {"bucket": 1790420779.8976035, "queries": 44, "flagged": 0}, {"bucket": 1790420839.8976035, "queries": 73, "flagged": 9}, {"bucket": 1790420899.8976035, "queries": 50, "flagged": 11}, {"bucket": 1790420959.8976035, "queries": 45, "flagged": 19}, {"bucket": 1790421019.8976035, "queries": 61, "flagged": 3}, {"bucket": 1790421079.8976035, "queries": 61, "flagged": 18}, {"bucket": 1790421139.8976035, "queries": 37, "flagged": 16}, {"bucket": 1790421199.8976035, "queries": 69, "flagged": 8}, {"bucket": 1790421259.8976035, "queries": 75, "flagged": 6}, {"bucket": 1790421319.8976035, "queries": 74, "flagged": 16}, {"bucket": 1790421379.8976035, "queries": 86, "flagged": 13}, {"bucket": 1790421439.8976035, "queries": 31, "flagged": 12}, {"bucket": 1790421499.8976035, "queries": 70, "flagged": 13}, {"bucket": 1790421559.8976035, "queries": 82, "flagged": 16}, {"bucket": 1790421619.8976035, "queries": 69, "flagged": 5}, {"bucket": 1790421679.8976035, "queries": 64, "flagged": 6}, {"bucket": 1790421739.8976035, "queries": 85, "flagged": 20}, {"bucket": 1790421799.8976035, "queries": 64, "flagged": 20}, {"bucket": 1790421859.8976035, "queries": 43, "flagged": 16}, {"bucket": 1790421919.8976035, "queries": 43, "flagged": 17}, {"bucket": 1790421979.8976035, "queries": 69, "flagged": 18}, {"bucket": 1790422039.8976035, "queries": 84, "flagged": 4}, {"bucket": 1790422099.8976035, "queries": 44, "flagged": 20}, {"bucket": 1790422159.8976035, "queries": 81, "flagged": 11}, {"bucket": 1790422219.8976035, "queries": 87, "flagged": 5}, {"bucket": 1790422279.8976035, "queries": 50, "flagged": 19}, {"bucket": 1790422339.8976035, "queries": 50, "flagged": 6}, {"bucket": 1790422399.8976035, "queries": 43, "flagged": 6}, {"bucket": 1790422459.8976035, "queries": 86, "flagged": 3}, {"bucket": 1790422519.8976035, "queries": 38, "flagged": 7}, {"bucket": 1790422579.8976035, "queries": 38, "flagged": 2}, {"bucket": 1790422639.8976035, "queries": 46, "flagged": 12}, {"bucket": 1790422699.8976035, "queries": 36, "flagged": 13}, {"bucket": 1790422759.8976035, "queries": 83, "flagged": 13}, {"bucket": 1790422819.8976035, "queries": 64, "flagged": 22}, {"bucket": 1790422879.8976035, "queries": 38, "flagged": 6}, {"bucket": 1790422939.8976035, "queries": 55, "flagged": 20}, {"bucket": 1790422999.8976035, "queries": 73, "flagged": 0}, {"bucket": 1790423059.8976035, "queries": 36, "flagged": 6}, {"bucket": 1790423119.8976035, "queries": 66, "flagged": 21}, {"bucket": 1790423179.8976035, "queries": 52, "flagged": 11}, {"bucket": 1790423239.8976035, "queries": 37, "flagged": 22}, {"bucket": 1790423299.8976035, "queries": 62, "flagged": 20}, {"bucket": 1790423359.8976035, "queries": 78, "flagged": 10}, {"bucket": 1790423419.8976035, "queries": 62, "flagged": 21}, {"bucket": 1790423479.8976035, "queries": 83, "flagged": 6}, {"bucket": 1790423539.8976035, "queries": 81, "flagged": 2}, {"bucket": 1790423599.8976035, "queries": 60, "flagged": 3}, {"bucket": 1790423659.8976035, "queries": 31, "flagged": 1}, {"bucket": 1790423719.8976035, "queries": 78, "flagged": 17}, {"bucket": 1790423779.8976035, "queries": 69, "flagged": 16}, {"bucket": 1790423839.8976035, "queries": 87, "flagged": 18}, {"bucket": 1790423899.8976035, "queries": 60, "flagged": 4}, {"bucket": 1790423959.8976035, "queries": 42, "flagged": 5}, {"bucket": 1790424019.8976035, "queries": 37, "flagged": 6}, {"bucket": 1790424079.8976035, "queries": 41, "flagged": 5}, {"bucket": 1790424139.8976035, "queries": 48, "flagged": 21}, {"bucket": 1790424199.8976035, "queries": 36, "flagged": 18}, {"bucket": 1790424259.8976035, "queries": 33, "flagged": 4}, {"bucket": 1790424319.8976035, "queries": 90, "flagged": 21}, {"bucket": 1790424379.8976035, "queries": 59, "flagged": 2}, {"bucket": 1790424439.8976035, "queries": 78, "flagged": 3}, {"bucket": 1790424499.8976035, "queries": 50, "flagged": 12}, {"bucket": 1790424559.8976035, "queries": 59, "flagged": 13}, {"bucket": 1790424619.8976035, "queries": 62, "flagged": 11}, {"bucket": 1790424679.8976035, "queries": 57, "flagged": 6}, {"bucket": 1790424739.8976035, "queries": 68, "flagged": 11}, {"bucket": 1790424799.8976035, "queries": 30, "flagged": 20}, {"bucket": 1790424859.8976035, "queries": 74, "flagged": 1}, {"bucket": 1790424919.8976035, "queries": 84, "flagged": 6}, {"bucket": 1790424979.8976035, "queries": 41, "flagged": 13}, {"bucket": 1790425039.8976035, "queries": 59, "flagged": 11}, {"bucket": 1790425099.8976035, "queries": 77, "flagged": 11}, {"bucket": 1790425159.8976035, "queries": 55, "flagged": 6}, {"bucket": 1790425219.8976035, "queries": 68, "flagged": 5}, {"bucket": 1790425279.8976035, "queries": 36, "flagged": 16}, {"bucket": 1790425339.8976035, "queries": 80, "flagged": 0}, {"bucket": 1790425399.8976035, "queries": 50, "flagged": 2}, {"bucket": 1790425459.8976035, "queries": 81, "flagged": 22}], "top_sources": [{"src_ip": "10.0.0.9", "flagged": 162, "total": 1856}, {"src_ip": "10.0.0.31", "flagged": 146, "total": 2655}, {"src_ip": "192.168.1.44", "flagged": 49, "total": 2265}, {"src_ip": "10.0.0.12", "flagged": 150, "total": 1596}, {"src_ip": "10.0.0.7", "flagged": 67, "total": 1344}], "top_domains": [{"domain": "evil-tunnel.example", "flagged": 201}, {"domain": "drip.exfil-node.net", "flagged": 34}, {"domain": "c2beacon.dyndns.org", "flagged": 12}, {"domain": "fonts.goptis1.com", "flagged": 3}]}, "status": {"mode": "live:wlo1", "uptime_s": 15120, "queries_processed": 128402, "can_capture": true, "can_firewall": true, "is_root": true, "capture_healthy": true, "capture_heartbeat_age_s": 0.4, "capture_ifaces": {"wlo1": {"ok": true, "age_s": 0.4}}, "api_port": 5050, "db_path": "/var/lib/exfiltrap/exfiltrap.db", "blocked_count": 3, "privileges": {"is_root": true, "cap_net_raw": true}, "policy": {"sinkhole": true, "sinkhole_strikes": 2, "sinkhole_ttl": 3600, "popularity_guard": true, "self_dos_guard": true, "own_ips": ["192.168.1.44"]}, "canaries": ["zq7f.canary.exfiltrap.sensor", "k9x2.canary.exfiltrap.sensor"], "sinkhole_domains": ["evil-tunnel.example"], "notify_socket": true}, "sessions": {"sessions": [{"src_ip": "10.0.0.9", "query_count": 1841, "mean_mass": 42.1, "cumulative_mass": 91230.5, "interval_cv": 0.18, "last_seen": 1790425455.8976035, "slow_drip": true, "beacon": true, "velocity": true, "domain_beacon": false, "resp_answer_bytes": 0}, {"src_ip": "10.0.0.31", "query_count": 620, "mean_mass": 12.4, "cumulative_mass": 7688.0, "interval_cv": 0.9, "last_seen": 1790425389.8976035, "slow_drip": false, "beacon": false, "velocity": true, "domain_beacon": true, "resp_answer_bytes": 361321}, {"src_ip": "192.168.1.44", "query_count": 4021, "mean_mass": 8.2, "cumulative_mass": 32972.2, "interval_cv": 1.4, "last_seen": 1790425447.8976035, "slow_drip": false, "beacon": false, "velocity": false, "domain_beacon": false, "resp_answer_bytes": 0}]}, "events": {"events": [{"ts": 1790425459.8976035, "src_ip": "10.0.0.12", "qname": "cdn0.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.552, "resolver": "1.1.1.1", "process": "curl", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790425422.8976035, "src_ip": "10.0.0.7", "qname": "538800cb14a9.fonts.goptis1.com", "risk_level": "HIGH", "rf_probability": 0.184, "resolver": "192.168.1.1", "process": "curl", "reasons": "slow-drip mass elevated", "confirmed": false, "decoded_preview": "", "mitre": "T1071.004,T1048.003"}, {"ts": 1790425385.8976035, "src_ip": "10.0.0.7", "qname": "cdn2.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.974, "resolver": "10.0.0.1", "process": "svchost.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790425348.8976035, "src_ip": "10.0.0.7", "qname": "8b932b10bd3e.evil-tunnel.example", "risk_level": "MEDIUM", "rf_probability": 0.132, "resolver": "1.1.1.1", "process": "svchost.exe", "reasons": "entropy above baseline; label churn", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790425311.8976035, "src_ip": "192.168.1.44", "qname": "cdn4.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.492, "resolver": "1.1.1.1", "process": "svchost.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790425274.8976035, "src_ip": "10.0.0.12", "qname": "cdn5.c2beacon.dyndns.org", "risk_level": "LOW", "rf_probability": 0.104, "resolver": "8.8.8.8", "process": "powershell.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790425237.8976035, "src_ip": "10.0.0.7", "qname": "b2a5e5feec82.fonts.goptis1.com", "risk_level": "MEDIUM", "rf_probability": 0.848, "resolver": "192.168.1.1", "process": "node", "reasons": "entropy above baseline; label churn", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790425200.8976035, "src_ip": "10.0.0.9", "qname": "c02afa11172a.c2beacon.dyndns.org", "risk_level": "MEDIUM", "rf_probability": 0.782, "resolver": "10.0.0.1", "process": "python3", "reasons": "entropy above baseline; label churn", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790425163.8976035, "src_ip": "10.0.0.9", "qname": "1d4442f5ef52.fonts.goptis1.com", "risk_level": "HIGH", "rf_probability": 0.854, "resolver": "8.8.8.8", "process": "curl", "reasons": "slow-drip mass elevated", "confirmed": false, "decoded_preview": "", "mitre": "T1071.004,T1048.003"}, {"ts": 1790425126.8976035, "src_ip": "10.0.0.12", "qname": "cdn9.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.434, "resolver": "10.0.0.1", "process": "powershell.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790425089.8976035, "src_ip": "192.168.1.44", "qname": "cdn10.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.4, "resolver": "192.168.1.1", "process": "node", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790425052.8976035, "src_ip": "10.0.0.9", "qname": "cdn11.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.22, "resolver": "8.8.8.8", "process": "python3", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790425015.8976035, "src_ip": "10.0.0.31", "qname": "cdn12.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.707, "resolver": "1.1.1.1", "process": "powershell.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424978.8976035, "src_ip": "10.0.0.12", "qname": "cdn13.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.673, "resolver": "8.8.8.8", "process": "powershell.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424941.8976035, "src_ip": "10.0.0.9", "qname": "cdn14.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.34, "resolver": "192.168.1.1", "process": "python3", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424904.8976035, "src_ip": "10.0.0.7", "qname": "cdn15.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.671, "resolver": "8.8.8.8", "process": "python3", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424867.8976035, "src_ip": "10.0.0.12", "qname": "607a1e428573.drip.exfil-node.net", "risk_level": "CONFIRMED", "rf_probability": 0.788, "resolver": "192.168.1.1", "process": "node", "reasons": "canary trap tripped; velocity burst; slow-drip mass elevated", "confirmed": true, "decoded_preview": "FLAG{b64_secret_d608dc6212}", "mitre": "T1071.004,T1048.003"}, {"ts": 1790424830.8976035, "src_ip": "10.0.0.7", "qname": "cdn17.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.667, "resolver": "8.8.8.8", "process": "svchost.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424793.8976035, "src_ip": "10.0.0.31", "qname": "cdn18.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.954, "resolver": "10.0.0.1", "process": "svchost.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424756.8976035, "src_ip": "10.0.0.31", "qname": "cdn19.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.658, "resolver": "192.168.1.1", "process": "curl", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424719.8976035, "src_ip": "10.0.0.31", "qname": "3cdd9128ea4a.drip.exfil-node.net", "risk_level": "HIGH", "rf_probability": 0.66, "resolver": "1.1.1.1", "process": "powershell.exe", "reasons": "slow-drip mass elevated", "confirmed": false, "decoded_preview": "", "mitre": "T1071.004,T1048.003"}, {"ts": 1790424682.8976035, "src_ip": "10.0.0.12", "qname": "6682220c3c95.evil-tunnel.example", "risk_level": "HIGH", "rf_probability": 0.197, "resolver": "192.168.1.1", "process": "curl", "reasons": "slow-drip mass elevated", "confirmed": false, "decoded_preview": "", "mitre": "T1071.004,T1048.003"}, {"ts": 1790424645.8976035, "src_ip": "192.168.1.44", "qname": "218dba6b2cdf.fonts.goptis1.com", "risk_level": "MEDIUM", "rf_probability": 0.905, "resolver": "10.0.0.1", "process": "node", "reasons": "entropy above baseline; label churn", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424608.8976035, "src_ip": "10.0.0.31", "qname": "cdn23.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.303, "resolver": "8.8.8.8", "process": "node", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424571.8976035, "src_ip": "10.0.0.9", "qname": "cdn24.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.162, "resolver": "10.0.0.1", "process": "powershell.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424534.8976035, "src_ip": "10.0.0.31", "qname": "cdn25.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.351, "resolver": "1.1.1.1", "process": "python3", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424497.8976035, "src_ip": "192.168.1.44", "qname": "cdn26.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.685, "resolver": "1.1.1.1", "process": "svchost.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424460.8976035, "src_ip": "10.0.0.12", "qname": "cdn27.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.91, "resolver": "192.168.1.1", "process": "python3", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424423.8976035, "src_ip": "10.0.0.12", "qname": "cdn28.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.16, "resolver": "192.168.1.1", "process": "node", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424386.8976035, "src_ip": "10.0.0.9", "qname": "cdn29.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.503, "resolver": "192.168.1.1", "process": "python3", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424349.8976035, "src_ip": "192.168.1.44", "qname": "a5cc115ac3bd.drip.exfil-node.net", "risk_level": "HIGH", "rf_probability": 0.71, "resolver": "8.8.8.8", "process": "powershell.exe", "reasons": "slow-drip mass elevated", "confirmed": false, "decoded_preview": "", "mitre": "T1071.004,T1048.003"}, {"ts": 1790424312.8976035, "src_ip": "10.0.0.12", "qname": "2883a39267b8.evil-tunnel.example", "risk_level": "CONFIRMED", "rf_probability": 0.656, "resolver": "10.0.0.1", "process": "powershell.exe", "reasons": "canary trap tripped; velocity burst; slow-drip mass elevated", "confirmed": true, "decoded_preview": "FLAG{b64_secret_b2712a9503}", "mitre": "T1071.004,T1048.003"}, {"ts": 1790424275.8976035, "src_ip": "10.0.0.9", "qname": "4300b0a3ac96.evil-tunnel.example", "risk_level": "MEDIUM", "rf_probability": 0.984, "resolver": "10.0.0.1", "process": "node", "reasons": "entropy above baseline; label churn", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424238.8976035, "src_ip": "10.0.0.12", "qname": "cdn33.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.512, "resolver": "8.8.8.8", "process": "svchost.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424201.8976035, "src_ip": "192.168.1.44", "qname": "d1d4ed999e75.evil-tunnel.example", "risk_level": "MEDIUM", "rf_probability": 0.528, "resolver": "1.1.1.1", "process": "python3", "reasons": "entropy above baseline; label churn", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424164.8976035, "src_ip": "192.168.1.44", "qname": "cdn35.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.898, "resolver": "192.168.1.1", "process": "node", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424127.8976035, "src_ip": "10.0.0.7", "qname": "cdn36.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.251, "resolver": "192.168.1.1", "process": "powershell.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424090.8976035, "src_ip": "192.168.1.44", "qname": "cdn37.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.46, "resolver": "192.168.1.1", "process": "curl", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424053.8976035, "src_ip": "10.0.0.31", "qname": "544369623a36.drip.exfil-node.net", "risk_level": "MEDIUM", "rf_probability": 0.619, "resolver": "192.168.1.1", "process": "curl", "reasons": "entropy above baseline; label churn", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790424016.8976035, "src_ip": "192.168.1.44", "qname": "cdn39.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.845, "resolver": "8.8.8.8", "process": "python3", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423979.8976035, "src_ip": "10.0.0.31", "qname": "d662e21cc35d.c2beacon.dyndns.org", "risk_level": "CONFIRMED", "rf_probability": 0.52, "resolver": "1.1.1.1", "process": "powershell.exe", "reasons": "canary trap tripped; velocity burst; slow-drip mass elevated", "confirmed": true, "decoded_preview": "FLAG{b64_secret_37acee61a0}", "mitre": "T1071.004,T1048.003"}, {"ts": 1790423942.8976035, "src_ip": "10.0.0.7", "qname": "cdn41.c2beacon.dyndns.org", "risk_level": "LOW", "rf_probability": 0.503, "resolver": "8.8.8.8", "process": "python3", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423905.8976035, "src_ip": "192.168.1.44", "qname": "cdn42.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.608, "resolver": "192.168.1.1", "process": "svchost.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423868.8976035, "src_ip": "10.0.0.12", "qname": "cdn43.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.505, "resolver": "8.8.8.8", "process": "node", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423831.8976035, "src_ip": "10.0.0.9", "qname": "cdn44.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.976, "resolver": "8.8.8.8", "process": "powershell.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423794.8976035, "src_ip": "10.0.0.9", "qname": "cdn45.c2beacon.dyndns.org", "risk_level": "LOW", "rf_probability": 0.709, "resolver": "1.1.1.1", "process": "powershell.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423757.8976035, "src_ip": "10.0.0.12", "qname": "cdn46.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.576, "resolver": "8.8.8.8", "process": "curl", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423720.8976035, "src_ip": "10.0.0.7", "qname": "cdn47.c2beacon.dyndns.org", "risk_level": "LOW", "rf_probability": 0.721, "resolver": "1.1.1.1", "process": "powershell.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423683.8976035, "src_ip": "10.0.0.9", "qname": "ca5c15691fbf.drip.exfil-node.net", "risk_level": "HIGH", "rf_probability": 0.894, "resolver": "10.0.0.1", "process": "curl", "reasons": "slow-drip mass elevated", "confirmed": false, "decoded_preview": "", "mitre": "T1071.004,T1048.003"}, {"ts": 1790423646.8976035, "src_ip": "10.0.0.9", "qname": "cdn49.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.435, "resolver": "192.168.1.1", "process": "powershell.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423609.8976035, "src_ip": "10.0.0.9", "qname": "cdn50.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.743, "resolver": "8.8.8.8", "process": "curl", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423572.8976035, "src_ip": "10.0.0.9", "qname": "cdn51.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.97, "resolver": "192.168.1.1", "process": "node", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423535.8976035, "src_ip": "192.168.1.44", "qname": "e24735819530.evil-tunnel.example", "risk_level": "HIGH", "rf_probability": 0.133, "resolver": "192.168.1.1", "process": "svchost.exe", "reasons": "slow-drip mass elevated", "confirmed": false, "decoded_preview": "", "mitre": "T1071.004,T1048.003"}, {"ts": 1790423498.8976035, "src_ip": "10.0.0.12", "qname": "cdn53.c2beacon.dyndns.org", "risk_level": "LOW", "rf_probability": 0.919, "resolver": "1.1.1.1", "process": "python3", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423461.8976035, "src_ip": "10.0.0.31", "qname": "cdn54.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.574, "resolver": "1.1.1.1", "process": "powershell.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423424.8976035, "src_ip": "10.0.0.12", "qname": "cdn55.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.615, "resolver": "8.8.8.8", "process": "curl", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423387.8976035, "src_ip": "10.0.0.7", "qname": "cdn56.c2beacon.dyndns.org", "risk_level": "LOW", "rf_probability": 0.669, "resolver": "192.168.1.1", "process": "node", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423350.8976035, "src_ip": "192.168.1.44", "qname": "c324ccd96d22.drip.exfil-node.net", "risk_level": "MEDIUM", "rf_probability": 0.962, "resolver": "192.168.1.1", "process": "svchost.exe", "reasons": "entropy above baseline; label churn", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423313.8976035, "src_ip": "10.0.0.7", "qname": "cdn58.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.202, "resolver": "8.8.8.8", "process": "svchost.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}, {"ts": 1790423276.8976035, "src_ip": "10.0.0.7", "qname": "cdn59.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.916, "resolver": "8.8.8.8", "process": "powershell.exe", "reasons": "entropy above baseline", "confirmed": false, "decoded_preview": "", "mitre": ""}]}, "queries": {"queries": [{"ts": 1790425459.8976035, "src_ip": "10.0.0.12", "qname": "cdn0.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.552, "resolver": "1.1.1.1", "process": "curl"}, {"ts": 1790425422.8976035, "src_ip": "10.0.0.7", "qname": "538800cb14a9.fonts.goptis1.com", "risk_level": "HIGH", "rf_probability": 0.184, "resolver": "192.168.1.1", "process": "curl"}, {"ts": 1790425385.8976035, "src_ip": "10.0.0.7", "qname": "cdn2.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.974, "resolver": "10.0.0.1", "process": "svchost.exe"}, {"ts": 1790425348.8976035, "src_ip": "10.0.0.7", "qname": "8b932b10bd3e.evil-tunnel.example", "risk_level": "MEDIUM", "rf_probability": 0.132, "resolver": "1.1.1.1", "process": "svchost.exe"}, {"ts": 1790425311.8976035, "src_ip": "192.168.1.44", "qname": "cdn4.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.492, "resolver": "1.1.1.1", "process": "svchost.exe"}, {"ts": 1790425274.8976035, "src_ip": "10.0.0.12", "qname": "cdn5.c2beacon.dyndns.org", "risk_level": "LOW", "rf_probability": 0.104, "resolver": "8.8.8.8", "process": "powershell.exe"}, {"ts": 1790425237.8976035, "src_ip": "10.0.0.7", "qname": "b2a5e5feec82.fonts.goptis1.com", "risk_level": "MEDIUM", "rf_probability": 0.848, "resolver": "192.168.1.1", "process": "node"}, {"ts": 1790425200.8976035, "src_ip": "10.0.0.9", "qname": "c02afa11172a.c2beacon.dyndns.org", "risk_level": "MEDIUM", "rf_probability": 0.782, "resolver": "10.0.0.1", "process": "python3"}, {"ts": 1790425163.8976035, "src_ip": "10.0.0.9", "qname": "1d4442f5ef52.fonts.goptis1.com", "risk_level": "HIGH", "rf_probability": 0.854, "resolver": "8.8.8.8", "process": "curl"}, {"ts": 1790425126.8976035, "src_ip": "10.0.0.12", "qname": "cdn9.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.434, "resolver": "10.0.0.1", "process": "powershell.exe"}, {"ts": 1790425089.8976035, "src_ip": "192.168.1.44", "qname": "cdn10.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.4, "resolver": "192.168.1.1", "process": "node"}, {"ts": 1790425052.8976035, "src_ip": "10.0.0.9", "qname": "cdn11.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.22, "resolver": "8.8.8.8", "process": "python3"}, {"ts": 1790425015.8976035, "src_ip": "10.0.0.31", "qname": "cdn12.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.707, "resolver": "1.1.1.1", "process": "powershell.exe"}, {"ts": 1790424978.8976035, "src_ip": "10.0.0.12", "qname": "cdn13.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.673, "resolver": "8.8.8.8", "process": "powershell.exe"}, {"ts": 1790424941.8976035, "src_ip": "10.0.0.9", "qname": "cdn14.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.34, "resolver": "192.168.1.1", "process": "python3"}, {"ts": 1790424904.8976035, "src_ip": "10.0.0.7", "qname": "cdn15.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.671, "resolver": "8.8.8.8", "process": "python3"}, {"ts": 1790424867.8976035, "src_ip": "10.0.0.12", "qname": "607a1e428573.drip.exfil-node.net", "risk_level": "CONFIRMED", "rf_probability": 0.788, "resolver": "192.168.1.1", "process": "node"}, {"ts": 1790424830.8976035, "src_ip": "10.0.0.7", "qname": "cdn17.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.667, "resolver": "8.8.8.8", "process": "svchost.exe"}, {"ts": 1790424793.8976035, "src_ip": "10.0.0.31", "qname": "cdn18.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.954, "resolver": "10.0.0.1", "process": "svchost.exe"}, {"ts": 1790424756.8976035, "src_ip": "10.0.0.31", "qname": "cdn19.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.658, "resolver": "192.168.1.1", "process": "curl"}, {"ts": 1790424719.8976035, "src_ip": "10.0.0.31", "qname": "3cdd9128ea4a.drip.exfil-node.net", "risk_level": "HIGH", "rf_probability": 0.66, "resolver": "1.1.1.1", "process": "powershell.exe"}, {"ts": 1790424682.8976035, "src_ip": "10.0.0.12", "qname": "6682220c3c95.evil-tunnel.example", "risk_level": "HIGH", "rf_probability": 0.197, "resolver": "192.168.1.1", "process": "curl"}, {"ts": 1790424645.8976035, "src_ip": "192.168.1.44", "qname": "218dba6b2cdf.fonts.goptis1.com", "risk_level": "MEDIUM", "rf_probability": 0.905, "resolver": "10.0.0.1", "process": "node"}, {"ts": 1790424608.8976035, "src_ip": "10.0.0.31", "qname": "cdn23.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.303, "resolver": "8.8.8.8", "process": "node"}, {"ts": 1790424571.8976035, "src_ip": "10.0.0.9", "qname": "cdn24.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.162, "resolver": "10.0.0.1", "process": "powershell.exe"}, {"ts": 1790424534.8976035, "src_ip": "10.0.0.31", "qname": "cdn25.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.351, "resolver": "1.1.1.1", "process": "python3"}, {"ts": 1790424497.8976035, "src_ip": "192.168.1.44", "qname": "cdn26.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.685, "resolver": "1.1.1.1", "process": "svchost.exe"}, {"ts": 1790424460.8976035, "src_ip": "10.0.0.12", "qname": "cdn27.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.91, "resolver": "192.168.1.1", "process": "python3"}, {"ts": 1790424423.8976035, "src_ip": "10.0.0.12", "qname": "cdn28.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.16, "resolver": "192.168.1.1", "process": "node"}, {"ts": 1790424386.8976035, "src_ip": "10.0.0.9", "qname": "cdn29.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.503, "resolver": "192.168.1.1", "process": "python3"}, {"ts": 1790424349.8976035, "src_ip": "192.168.1.44", "qname": "a5cc115ac3bd.drip.exfil-node.net", "risk_level": "HIGH", "rf_probability": 0.71, "resolver": "8.8.8.8", "process": "powershell.exe"}, {"ts": 1790424312.8976035, "src_ip": "10.0.0.12", "qname": "2883a39267b8.evil-tunnel.example", "risk_level": "CONFIRMED", "rf_probability": 0.656, "resolver": "10.0.0.1", "process": "powershell.exe"}, {"ts": 1790424275.8976035, "src_ip": "10.0.0.9", "qname": "4300b0a3ac96.evil-tunnel.example", "risk_level": "MEDIUM", "rf_probability": 0.984, "resolver": "10.0.0.1", "process": "node"}, {"ts": 1790424238.8976035, "src_ip": "10.0.0.12", "qname": "cdn33.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.512, "resolver": "8.8.8.8", "process": "svchost.exe"}, {"ts": 1790424201.8976035, "src_ip": "192.168.1.44", "qname": "d1d4ed999e75.evil-tunnel.example", "risk_level": "MEDIUM", "rf_probability": 0.528, "resolver": "1.1.1.1", "process": "python3"}, {"ts": 1790424164.8976035, "src_ip": "192.168.1.44", "qname": "cdn35.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.898, "resolver": "192.168.1.1", "process": "node"}, {"ts": 1790424127.8976035, "src_ip": "10.0.0.7", "qname": "cdn36.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.251, "resolver": "192.168.1.1", "process": "powershell.exe"}, {"ts": 1790424090.8976035, "src_ip": "192.168.1.44", "qname": "cdn37.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.46, "resolver": "192.168.1.1", "process": "curl"}, {"ts": 1790424053.8976035, "src_ip": "10.0.0.31", "qname": "544369623a36.drip.exfil-node.net", "risk_level": "MEDIUM", "rf_probability": 0.619, "resolver": "192.168.1.1", "process": "curl"}, {"ts": 1790424016.8976035, "src_ip": "192.168.1.44", "qname": "cdn39.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.845, "resolver": "8.8.8.8", "process": "python3"}, {"ts": 1790423979.8976035, "src_ip": "10.0.0.31", "qname": "d662e21cc35d.c2beacon.dyndns.org", "risk_level": "CONFIRMED", "rf_probability": 0.52, "resolver": "1.1.1.1", "process": "powershell.exe"}, {"ts": 1790423942.8976035, "src_ip": "10.0.0.7", "qname": "cdn41.c2beacon.dyndns.org", "risk_level": "LOW", "rf_probability": 0.503, "resolver": "8.8.8.8", "process": "python3"}, {"ts": 1790423905.8976035, "src_ip": "192.168.1.44", "qname": "cdn42.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.608, "resolver": "192.168.1.1", "process": "svchost.exe"}, {"ts": 1790423868.8976035, "src_ip": "10.0.0.12", "qname": "cdn43.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.505, "resolver": "8.8.8.8", "process": "node"}, {"ts": 1790423831.8976035, "src_ip": "10.0.0.9", "qname": "cdn44.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.976, "resolver": "8.8.8.8", "process": "powershell.exe"}, {"ts": 1790423794.8976035, "src_ip": "10.0.0.9", "qname": "cdn45.c2beacon.dyndns.org", "risk_level": "LOW", "rf_probability": 0.709, "resolver": "1.1.1.1", "process": "powershell.exe"}, {"ts": 1790423757.8976035, "src_ip": "10.0.0.12", "qname": "cdn46.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.576, "resolver": "8.8.8.8", "process": "curl"}, {"ts": 1790423720.8976035, "src_ip": "10.0.0.7", "qname": "cdn47.c2beacon.dyndns.org", "risk_level": "LOW", "rf_probability": 0.721, "resolver": "1.1.1.1", "process": "powershell.exe"}, {"ts": 1790423683.8976035, "src_ip": "10.0.0.9", "qname": "ca5c15691fbf.drip.exfil-node.net", "risk_level": "HIGH", "rf_probability": 0.894, "resolver": "10.0.0.1", "process": "curl"}, {"ts": 1790423646.8976035, "src_ip": "10.0.0.9", "qname": "cdn49.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.435, "resolver": "192.168.1.1", "process": "powershell.exe"}, {"ts": 1790423609.8976035, "src_ip": "10.0.0.9", "qname": "cdn50.drip.exfil-node.net", "risk_level": "LOW", "rf_probability": 0.743, "resolver": "8.8.8.8", "process": "curl"}, {"ts": 1790423572.8976035, "src_ip": "10.0.0.9", "qname": "cdn51.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.97, "resolver": "192.168.1.1", "process": "node"}, {"ts": 1790423535.8976035, "src_ip": "192.168.1.44", "qname": "e24735819530.evil-tunnel.example", "risk_level": "HIGH", "rf_probability": 0.133, "resolver": "192.168.1.1", "process": "svchost.exe"}, {"ts": 1790423498.8976035, "src_ip": "10.0.0.12", "qname": "cdn53.c2beacon.dyndns.org", "risk_level": "LOW", "rf_probability": 0.919, "resolver": "1.1.1.1", "process": "python3"}, {"ts": 1790423461.8976035, "src_ip": "10.0.0.31", "qname": "cdn54.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.574, "resolver": "1.1.1.1", "process": "powershell.exe"}, {"ts": 1790423424.8976035, "src_ip": "10.0.0.12", "qname": "cdn55.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.615, "resolver": "8.8.8.8", "process": "curl"}, {"ts": 1790423387.8976035, "src_ip": "10.0.0.7", "qname": "cdn56.c2beacon.dyndns.org", "risk_level": "LOW", "rf_probability": 0.669, "resolver": "192.168.1.1", "process": "node"}, {"ts": 1790423350.8976035, "src_ip": "192.168.1.44", "qname": "c324ccd96d22.drip.exfil-node.net", "risk_level": "MEDIUM", "rf_probability": 0.962, "resolver": "192.168.1.1", "process": "svchost.exe"}, {"ts": 1790423313.8976035, "src_ip": "10.0.0.7", "qname": "cdn58.fonts.goptis1.com", "risk_level": "LOW", "rf_probability": 0.202, "resolver": "8.8.8.8", "process": "svchost.exe"}, {"ts": 1790423276.8976035, "src_ip": "10.0.0.7", "qname": "cdn59.evil-tunnel.example", "risk_level": "LOW", "rf_probability": 0.916, "resolver": "8.8.8.8", "process": "powershell.exe"}]}, "blocked": {"blocked": [{"target": "10.0.0.9", "ts": 1790425159.8976035, "risk_level": "CONFIRMED", "kind": "source", "trigger_src": "10.0.0.9", "qname": "aGVsbG8.evil-tunnel.example", "resolver": "8.8.8.8", "process": "python3", "details": "iptables DROP \u00b7 ns-scoped"}, {"target": "evil-tunnel.example", "ts": 1790424959.8976035, "risk_level": "HIGH", "kind": "domain", "trigger_src": "10.0.0.9", "qname": "aGVsbG8.evil-tunnel.example", "resolver": "8.8.8.8", "process": "python3", "details": "hosts-file sink \u00b7 TTL 3600s"}]}, "sinkhole": {"domains": ["evil-tunnel.example"], "enabled": true, "hits": [{"ts": 1790425459.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790425399.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790425339.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790425279.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790425219.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790425159.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790425099.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790425039.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424979.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424919.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424859.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424799.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424739.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424679.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424619.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424559.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424499.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424439.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424379.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424319.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424259.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424199.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424139.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}, {"ts": 1790424079.8976035, "qname": "aGVsbG8.evil-tunnel.example", "base": "evil-tunnel.example"}]}, "allowlist": {"allowlist": [{"ip": "10.0.0.1", "ts": 1790416459.8976035, "note": "gateway"}]}, "mute": {"muted": [{"domain": "cdn.cloudflare.net", "ts": 1790416459.8976035, "note": "cdn"}]}};
+
+const R=(p)=>{ if(p.startsWith('/api/stats'))return MOCK.stats;
+  if(p.startsWith('/api/status'))return MOCK.status;
+  if(p.startsWith('/api/sessions'))return MOCK.sessions;
+  if(p.startsWith('/api/events'))return MOCK.events;
+  if(p.startsWith('/api/queries'))return MOCK.queries;
+  if(p.startsWith('/api/blocked'))return MOCK.blocked;
+  if(p.startsWith('/api/sinkhole'))return MOCK.sinkhole;
+  if(p.startsWith('/api/allowlist'))return MOCK.allowlist;
+  if(p.startsWith('/api/mute'))return MOCK.mute;
+  return {}; };
+const realFetch=window.fetch;
+window.fetch=async function(u,o){
+  if(typeof u==='string'&&u.startsWith('/api/')){
+    if((o&&o.method&&o.method!=='GET')) return {ok:true,json:async()=>({ok:true})};
+    return {ok:true,json:async()=>R(u)};
+  }
+  return realFetch.apply(this,arguments);
+};
+const RF=window.EventSource;
+window.EventSource=function(){ return {close(){}, set onopen(v){}, set onerror(v){}, set onmessage(v){}}; };
+})();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+"use strict";
+/* ================================================================
+   ExfilTrap Console — vanilla JS, hash-routed, no framework.
+   Data contract mirrors exfiltrap/dashboard/app.py exactly.
+   ================================================================ */
+const $  = (id) => document.getElementById(id);
+const el = (sel, root) => (root || document).querySelector(sel);
+const els = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+/* ---------------- state (single source of truth) ---------------- */
+const S = {
+  route: { view: "overview", mode: null },
+  paused: false,
+  theme: localStorage.getItem("et-theme") || "dark",
+  density: localStorage.getItem("et-density") || "comfortable",
+  status: null,
+  stats: null,
+  events: [],          // risk_events
+  queries: [],         // recent queries (sources mode fallback)
+  sessions: [],
+  blocked: [],
+  sinkhole: { domains: [], hits: [] },
+  allowlist: [], muted: [],
+  selectedEventKey: null,
+  sseState: "connecting",
+  pendingEvents: [],   // buffered while scrolled away / paused / hovered
+  hoverFeed: false,
+  sort: {
+    events: { key: "ts", dir: -1 },
+    sources: { key: "query_level", dir: -1 },
+  },
+  triageMode: "events",
+  responseMode: "ledger",
+  range: 7200,
+  search: "",
+  triageSearch: "",
+  triageRisk: "",
+  triageWindow: 0,
+  charts: { flow: null, risk: null },
+  lastAlertTs: null,
+};
+
+/* ---------------- utils ---------------- */
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+  (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const pad = (n) => String(n).padStart(2, "0");
+function fmtT(ts) {
+  if (!ts) return "–";
+  const d = new Date(ts * 1000), now = new Date();
+  const same = d.toDateString() === now.toDateString();
+  return same ? `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+              : `${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function fmtFull(ts) {
+  if (!ts) return "–";
+  return new Date(ts * 1000).toISOString().replace("T", " ").slice(0, 23);
+}
+function fmtUp(s) {
+  if (s == null) return "–";
+  s = Math.floor(s);
+  const d = Math.floor(s/86400), h = Math.floor(s%86400/3600),
+        m = Math.floor(s%3600/60);
+  if (d) return `${d}d ${h}h`; if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m`; return `${s}s`;
+}
+const nfmt = (n) => (n == null ? "0" : Number(n).toLocaleString());
+function reltime(ts) {
+  if (!ts) return "–";
+  const s = Math.max(0, Date.now()/1000 - ts);
+  if (s < 60) return Math.floor(s) + "s"; if (s < 3600) return Math.floor(s/60) + "m";
+  if (s < 86400) return Math.floor(s/3600) + "h"; return Math.floor(s/86400) + "d";
+}
+const RISK_ORDER = { LOW: 0, MEDIUM: 1, HIGH: 2, CONFIRMED: 3 };
+const GLYPH = { LOW: "glyph-LOW", MEDIUM: "glyph-MEDIUM",
+                HIGH: "glyph-HIGH", CONFIRMED: "glyph-CONFIRMED" };
+function riskBadge(level) {
+  const lv = RISK_ORDER[level] == null ? "LOW" : level;
+  return `<span class="risk risk-${lv}"><span class="glyph ${GLYPH[lv]}"></span>${lv}</span>`;
+}
+function monoCell(v, cls) {
+  if (v == null || v === "") return '<span class="pillnone">–</span>';
+  return `<span class="mono ${cls || ""} copyable" data-copy="${esc(v)}">${esc(v)}</span>`;
+}
+async function jget(url) {
+  try { const r = await fetch(url, { cache: "no-store" });
+        if (!r.ok) throw new Error(r.status); return await r.json(); }
+  catch (e) { return { __err: String(e && e.message || e) }; }
+}
+async function jsend(url, method, body) {
+  try {
+    const r = await fetch(url, { method,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined });
+    let j = null; try { j = await r.json(); } catch {}
+    return { ok: r.ok, status: r.status, body: j };
+  } catch (e) { return { ok: false, status: 0, body: null, err: String(e) }; }
+}
+function toast(msg, kind) {
+  const t = document.createElement("div");
+  t.className = "toast " + (kind || "");
+  t.innerHTML = msg;
+  $("toasts").appendChild(t);
+  setTimeout(() => { t.style.opacity = "0"; t.style.transition = "opacity .3s";
+    setTimeout(() => t.remove(), 320); }, 3400);
+}
+/* copy-to-clipboard via delegation */
+document.addEventListener("click", (ev) => {
+  const c = ev.target.closest("[data-copy]");
+  if (c && navigator.clipboard) {
+    navigator.clipboard.writeText(c.dataset.copy);
+    toast("Copied " + esc(c.dataset.copy).slice(0, 44), "ok");
+  }
+});
+
+/* ---------------- theme + density ---------------- */
+function applyTheme() {
+  document.documentElement.dataset.theme = S.theme;
+  localStorage.setItem("et-theme", S.theme);
+  if (S.stats) { renderCharts(); }
+}
+function applyDensity() {
+  const compact = S.density === "compact";
+  $("triage").classList.toggle("compact", compact);
+  els(".tbl-wrap").forEach((w) => w.parentElement.classList.toggle("compact", compact));
+  $("triage-density").textContent = compact ? "Compact" : "Comfort";
+  $("triage-density").classList.toggle("primary", compact);
+  localStorage.setItem("et-density", S.density);
+}
+
+/* ================================================================
+   ROUTER
+   ================================================================ */
+const TITLES = {
+  overview: ["Security Overview", "Live DNS tunnelling & exfiltration surveillance"],
+  triage:   ["Triage", "Every query and verdict with full attribution"],
+  response: ["Response", "The automated-response ledger, traps and policy"],
+  system:   ["System & Health", "Capture, engine, privileges and policy state"],
+  about:    ["About ExfilTrap", "Stateful DNS exfiltration defence"],
+};
+function parseHash() {
+  const h = location.hash.replace(/^#\/?/, "");
+  const parts = h.split("/").filter(Boolean);
+  return { view: parts[0] || "overview", mode: parts[1] || null };
+}
+function navigate() {
+  const r = parseHash();
+  if (!TITLES[r.view]) r.view = "overview";
+  S.route = r;
+  els(".view").forEach((v) => v.classList.remove("is-active"));
+  const target = $("view-" + r.view) || $("view-overview");
+  target.classList.add("is-active");
+  els(".nav").forEach((n) => n.classList.toggle("is-active", n.dataset.nav === r.view));
+  const t = TITLES[r.view];
+  $("view-title").textContent = t[0]; $("view-sub").textContent = t[1];
+  if (r.view === "triage" && r.mode) setTriageMode(r.mode, false);
+  if (r.view === "response" && r.mode) setResponseMode(r.mode, false);
+  $("viewport").scrollTop = 0;
+  refresh();
+}
+window.addEventListener("hashchange", navigate);
+
+/* ================================================================
+   STATUS BAR + POSTURE + ENGINE CARD + TICKER
+   ================================================================ */
+function renderStatus() {
+  const s = S.status;
+  const standalone = !s || s.service === "standalone-dashboard" || (!s.mode && !s.capture_ifaces);
+  const healthy = s && s.capture_healthy !== false && !standalone;
+  const mode = standalone ? "standalone" : (s.mode || "—");
+  $("sb-mode").textContent = mode;
+  $("sb-uptime").textContent = standalone ? "—" : fmtUp(s.uptime_s);
+  $("sb-queries").textContent = nfmt(s && s.queries_processed);
+  const capTxt = standalone ? "standalone — read-only DB"
+      : (healthy ? "healthy" : "DEGRADED");
+  $("sb-cap").textContent = "capture " + capTxt;
+  $("sb-cap-dot").className = "live-dot " + (standalone ? "idle" : (healthy ? "" : "warn"));
+  $("tick-capdot").className = $("sb-cap-dot").className;
+  $("tick-capture").textContent = mode;
+
+  // engine card
+  $("eng-state").textContent = standalone ? "STANDALONE" : (healthy ? "RUNNING" : "DEGRADED");
+  $("eng-dot").className = "live-dot " + (standalone ? "warn" : (healthy ? "" : "warn"));
+  $("eng-mode").textContent = mode;
+  $("eng-uptime").textContent = standalone ? "—" : fmtUp(s.uptime_s);
+  $("eng-hb").textContent = (s && s.capture_heartbeat_age_s != null)
+      ? Number(s.capture_heartbeat_age_s).toFixed(1) + "s" : "—";
+  const pr = (s && s.privileges) || {};
+  $("eng-priv").textContent = pr.is_root ? "root"
+      : (pr.cap_net_raw ? "CAP_NET_RAW" : (s && s.is_root ? "root" : "–"));
+
+  renderPosture(standalone, healthy);
+  renderSystemView(s, standalone);
+}
+
+function renderPosture(standalone, healthy) {
+  const p = $("posture");
+  const t = S.stats && S.stats.totals || {};
+  const conf = t.confirmed || 0;
+  const openHigh = S.events.filter((e) => e.risk_level === "HIGH" || e.risk_level === "CONFIRMED").length;
+  let cls = null, title = "", sub = "", ico = "", acts = "";
+  if (!standalone && !healthy) {
+    cls = "critical"; title = "Capture degraded";
+    sub = "The engine is not reporting a healthy capture heartbeat — detections may be missing.";
+    ico = warnSvg(); acts = `<a class="btn mini" href="#/system">Inspect System</a>`;
+  } else if (conf > 0) {
+    cls = "critical"; title = `${conf} confirmed exfiltration decode${conf === 1 ? "" : "s"}`;
+    sub = "Decoded payloads present in the evidence log. Automated response may already have fired.";
+    ico = warnSvg(); acts = `<a class="btn mini danger" href="#/triage/events">Review evidence</a>`;
+  } else if (openHigh > 0) {
+    cls = "elevated"; title = `${openHigh} open high-severity alert${openHigh === 1 ? "" : "s"}`;
+    sub = "Flagged queries are awaiting triage. Nothing confirmed decoded yet.";
+    ico = warnSvg(); acts = `<a class="btn mini" href="#/triage/events">Triage now</a>`;
+  }
+  if (!cls) { p.classList.remove("show", "elevated", "critical"); return; }
+  p.className = "posture show " + cls;
+  $("posture-ico").innerHTML = ico;
+  $("posture-title").textContent = title; $("posture-sub").textContent = sub;
+  $("posture-actions").innerHTML = acts;
+}
+const warnSvg = () => `<svg width="19" height="19" viewBox="0 0 24 24" fill="none"
+  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/>
+  <path d="M12 9v4"/><path d="M12 17h.01"/></svg>`;
+
+/* ================================================================
+   OVERVIEW
+   ================================================================ */
+function renderKpis() {
+  const t = (S.stats && S.stats.totals) || {};
+  const q = t.queries || 0, fl = t.flagged || 0, cf = t.confirmed || 0;
+  const clean = q ? (100 * (1 - fl / q)).toFixed(2) + "%" : "–";
+  const last = (S.stats && S.stats.timeseries || []).slice(-1)[0];
+  const cards = [
+    { k: "Queries", v: nfmt(q), d: last ? `<span class="up">+${last.queries}</span> last min` : "awaiting traffic", go: "#/triage/events", tone: "" },
+    { k: "Flagged", v: nfmt(fl), d: "HIGH + CONFIRMED", go: "#/triage/events", tone: "tone-high" },
+    { k: "Confirmed decodes", v: nfmt(cf), d: cf ? "payload recovered" : "none yet", go: "#/triage/events", tone: cf ? "tone-conf" : "" },
+    { k: "Active responses", v: nfmt(t.blocked), d: "sources dropped / sunk", go: "#/response/ledger", tone: "" },
+    { k: "Sinkhole intercepts", v: nfmt(t.sinkhole_hits), d: "hosts-file hits", go: "#/response/policy", tone: "" },
+    { k: "Clean rate", v: clean, d: fl ? `<span class="ok">${nfmt(q - fl)}</span> clean of ${nfmt(q)}` : "no traffic", go: "#/triage/events", tone: "tone-ok" },
+  ];
+  $("ov-kpis").innerHTML = cards.map((c) => `
+    <div class="stat clickable ${c.tone}" data-go="${c.go}">
+      <div class="k">${c.k}</div><div class="v">${c.v}</div>
+      <div class="d">${c.d}</div></div>`).join("");
+  els("#ov-kpis .stat").forEach((n) => n.addEventListener("click", () => {
+    location.hash = n.dataset.go;
+  }));
+}
+
+const CHART_COLORS = ["#5b6880", "#e2a336", "#f4794a", "#f0403a"];
+function chartTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  return {
+    grid: cs.getPropertyValue("--border-soft").trim() || "#161d2e",
+    tick: cs.getPropertyValue("--faint").trim() || "#55617a",
+    legend: cs.getPropertyValue("--dim").trim() || "#7d8aa3",
+    accent: cs.getPropertyValue("--accent").trim() || "#4f8ff7",
+    conf: cs.getPropertyValue("--lvl-conf").trim() || "#f0403a",
+    panel: cs.getPropertyValue("--panel").trim() || "#101627",
+  };
+}
+function renderCharts() {
+  if (typeof Chart === "undefined" || !S.stats) return;
+  const th = chartTheme();
+  const ts = (S.stats.timeseries || []).filter((x) => {
+    if (!S.range) return true;
+    return x.bucket >= (Date.now() / 1000 - S.range);
+  });
+  const labels = ts.map((x) => fmtT(x.bucket));
+  const qd = ts.map((x) => x.queries), fd = ts.map((x) => x.flagged);
+  const opts = {
+    animation: false, maintainAspectRatio: false,
+    interaction: { mode: "index", intersect: false },
+    plugins: { legend: { labels: { color: th.legend, boxWidth: 10, boxHeight: 10,
+      font: { size: 10.5 } } } },
+    scales: {
+      x: { ticks: { color: th.tick, maxTicksLimit: 9, font: { size: 10 } },
+           grid: { color: th.grid } },
+      y: { ticks: { color: th.tick, font: { size: 10 } }, grid: { color: th.grid },
+           beginAtZero: true },
+    },
+  };
+  if (S.charts.flow) {
+    S.charts.flow.data.labels = labels;
+    S.charts.flow.data.datasets[0].data = qd;
+    S.charts.flow.data.datasets[1].data = fd;
+    S.charts.flow.options.scales.x.ticks.color = th.tick;
+    S.charts.flow.options.scales.y.ticks.color = th.tick;
+    S.charts.flow.options.scales.x.grid.color = th.grid;
+    S.charts.flow.options.scales.y.grid.color = th.grid;
+    S.charts.flow.options.plugins.legend.labels.color = th.legend;
+    S.charts.flow.update("none");
+  } else if ($("chart-flow")) {
+    S.charts.flow = new Chart($("chart-flow"), { type: "line",
+      data: { labels, datasets: [
+        { label: "queries", data: qd, borderColor: th.accent, borderWidth: 1.7,
+          pointRadius: 0, tension: .35, fill: true,
+          backgroundColor: hexA(th.accent, .15) },
+        { label: "flagged", data: fd, borderColor: th.conf, borderWidth: 1.7,
+          pointRadius: 0, tension: .35, fill: true,
+          backgroundColor: hexA(th.conf, .13) } ] },
+      options: opts });
+  }
+  const lv = (S.stats && S.stats.levels) || {};
+  const levels = ["LOW", "MEDIUM", "HIGH", "CONFIRMED"];
+  const rdata = levels.map((l) => lv[l] || 0);
+  if (S.charts.risk) {
+    S.charts.risk.data.datasets[0].data = rdata;
+    S.charts.risk.data.datasets[0].borderColor = th.panel;
+    S.charts.risk.options.plugins.legend.labels.color = th.legend;
+    S.charts.risk.update("none");
+  } else if ($("chart-risk")) {
+    S.charts.risk = new Chart($("chart-risk"), { type: "doughnut",
+      data: { labels: levels, datasets: [{ data: rdata, backgroundColor: CHART_COLORS,
+        borderColor: th.panel, borderWidth: 3 }] },
+      options: { cutout: "68%", maintainAspectRatio: false,
+        plugins: { legend: { position: "bottom",
+          labels: { color: th.legend, boxWidth: 10, font: { size: 10.5 } } } } } });
+  }
+}
+function hexA(hex, a) {
+  const h = (hex || "#4f8ff7").replace("#", "");
+  const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+function renderTunnelHunt() {
+  const doms = (S.stats && S.stats.top_domains) || [];
+  const max = Math.max(1, ...doms.map((d) => d.flagged));
+  $("tunnel-hunt").innerHTML = doms.length ? doms.map((d) => `
+    <div class="kt">
+      <div class="t"><b data-copy="${esc(d.domain)}" title="${esc(d.domain)}">${esc(d.domain)}</b>
+        <span class="muted num">${d.flagged} flagged • ${max ? Math.round(100*d.flagged/max) : 0}%</span></div>
+      <div class="bar"><i class="hot" style="width:${Math.max(3, 100*d.flagged/max)|0}%"></i></div>
+    </div>`).join("")
+    : `<div class="empty-state"><b>No flagged traffic yet</b>
+       <span>Tunnel-hunt surfaces base domains once queries start scoring HIGH or CONFIRMED.</span></div>`;
+}
+function renderTopSources() {
+  const rows = (S.stats && S.stats.top_sources) || [];
+  const max = Math.max(1, ...rows.map((r) => r.flagged));
+  $("top-sources").innerHTML = rows.length ? rows.map((r) => `
+    <div class="kt">
+      <div class="t"><b data-src="${esc(r.src_ip)}" title="${esc(r.src_ip)}">${esc(r.src_ip)}</b>
+        <span class="muted num">${r.flagged} flagged / ${nfmt(r.total)}</span></div>
+      <div class="bar"><i class="${r.flagged ? "hot" : ""}"
+        style="width:${Math.max(3, 100*r.flagged/max)|0}%"></i></div>
+    </div>`).join("")
+    : `<div class="empty-state"><b>No sources yet</b>
+       <span>Top talkers ranks sources by flagged queries once traffic arrives.</span></div>`;
+  els("#top-sources [data-src]").forEach((n) =>
+    n.addEventListener("click", () => openSourceDrawer(n.dataset.src)));
+}
+
+/* ================================================================
+   SIGNAL CHIPS (from risk_events.reasons + mitre)
+   ================================================================ */
+function signalsHtml(e) {
+  const r = e.reasons || "";
+  const out = [];
+  if (/canary/i.test(r)) out.push('<span class="tag canary">CANARY</span>');
+  if (/velocity/i.test(r)) out.push('<span class="flag vel">VELOCITY</span>');
+  if (/beacon/i.test(r)) out.push('<span class="flag beacon">BEACON</span>');
+  if (/slow-drip|mass/i.test(r)) out.push('<span class="flag mass">MASS</span>');
+  if (/response channel/i.test(r)) out.push('<span class="flag resp">RESP</span>');
+  if (/hex-labeled/i.test(r)) out.push('<span class="tag src">HEX-A</span>');
+  if (/label churn/i.test(r)) out.push('<span class="tag src">CHURN</span>');
+  if (/case encoding/i.test(r)) out.push('<span class="tag canary">0x20</span>');
+  if (/qdcount|opcode|reserved header/i.test(r)) out.push('<span class="tag bypass">HDR</span>');
+  if (/INVISIBLE/i.test(r)) out.push('<span class="tag bypass">DoH</span>');
+  (e.mitre || "").split(",").filter(Boolean).forEach((m) =>
+    out.push(`<span class="tag mitre">${esc(m)}</span>`));
+  if (e.confirmed && !/canary/i.test(r)) out.push('<span class="tag sink">DECODED</span>');
+  return out.join(" ") || '<span class="faint">–</span>';
+}
+function procHtml(p) {
+  return p ? `<span class="proc">${esc(p)}</span>` : '<span class="proc none">unknown</span>';
+}
+function resolverHtml(r) {
+  if (!r) return '<span class="faint">–</span>';
+  const byp = /^(8\.8\.|1\.1\.1\.1|1\.0\.0\.1|9\.9\.9\.9|149\.112|208\.67|64\.6\.|77\.88\.)/.test(r);
+  return byp ? `<span class="mono" style="color:var(--warn)" title="public resolver — possible bypass">${esc(r)} ⚠</span>`
+             : `<span class="mono faint">${esc(r)}</span>`;
+}
+
+/* ================================================================
+   MINI ALERTS on Overview
+   ================================================================ */
+function renderMiniAlerts() {
+  const rows = S.events.slice(0, 8);
+  const tb = el("#mini-alerts tbody");
+  if (!tb) return;
+  tb.innerHTML = rows.length ? rows.map((e) => {
+    const key = e.ts + "|" + e.qname;
+    return `<tr class="sev ${esc(e.risk_level)}" data-key="${esc(key)}">
+      <td class="muted num">${fmtT(e.ts)}</td>
+      <td class="qname" title="${esc(e.qname)}"
+        ${/canary/i.test(e.reasons||"") ? 'style="color:var(--purple)"':""}>${esc(e.qname)}</td>
+      <td>${riskBadge(e.risk_level)}</td>
+      <td>${signalsHtml(e)}</td></tr>`;
+  }).join("") : `<tr><td colspan="4" class="empty">no alerts yet — quiet network</td></tr>`;
+  els("#mini-alerts tbody tr[data-key]").forEach((tr) => tr.addEventListener("click", () => {
+    S.selectedEventKey = tr.dataset.key;
+    location.hash = "#/triage/events";
+    setTimeout(() => { navigate(); selectEvent(tr.dataset.key); }, 0);
+  }));
+}
+
+/* ================================================================
+   TRIAGE — events feed
+   ================================================================ */
+function setTriageMode(mode, updateHash) {
+  S.triageMode = mode === "sources" ? "sources" : "events";
+  els("#triage-mode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.triageMode));
+  $("triage-events").style.display = S.triageMode === "events" ? "" : "none";
+  $("triage-sources").style.display = S.triageMode === "sources" ? "" : "none";
+  if (updateHash !== false) location.hash = "#/triage/" + S.triageMode;
+  if (S.triageMode === "sources") loadSessions();
+}
+function visibleEvents() {
+  let rows = S.events.slice();
+  if (S.triageRisk) rows = rows.filter((e) => e.risk_level === S.triageRisk);
+  if (S.triageWindow) {
+    const cut = Date.now() / 1000 - S.triageWindow;
+    rows = rows.filter((e) => e.ts >= cut);
+  }
+  const q = S.triageSearch.trim().toLowerCase();
+  if (q) rows = rows.filter((e) =>
+    (e.qname || "").toLowerCase().includes(q) || (e.src_ip || "").includes(q) ||
+    (e.process || "").toLowerCase().includes(q) || (e.resolver || "").includes(q) ||
+    (e.reasons || "").toLowerCase().includes(q));
+  return rows;
+}
+function sortEvents(rows) {
+  const { key, dir } = S.sort.events;
+  return rows.sort((a, b) => {
+    let x = a[key], y = b[key];
+    if (key === "risk_level") { x = RISK_ORDER[x] ?? -1; y = RISK_ORDER[y] ?? -1; }
+    if (typeof x === "string" || typeof y === "string") {
+      x = String(x || ""); y = String(y || "");
+      return dir * x.localeCompare(y);
+    }
+    return dir * ((x ?? 0) - (y ?? 0));
+  });
+}
+function renderEvents() {
+  const rows = sortEvents(visibleEvents());
+  const tb = el("#events-table tbody");
+  tb.innerHTML = rows.length ? rows.map((e) => {
+    const key = e.ts + "|" + e.qname;
+    return `<tr class="sev ${esc(e.risk_level)} ${key === S.selectedEventKey ? "sel" : ""}"
+      data-key="${esc(key)}">
+      <td class="muted num">${fmtT(e.ts)}</td>
+      <td class="qname" title="${esc(e.qname)}"
+        ${/canary/i.test(e.reasons||"")?'style="color:var(--purple)"':""}>${esc(e.qname)}</td>
+      <td class="mono faint">${esc(e.src_ip)}</td>
+      <td>${riskBadge(e.risk_level)}</td>
+      <td>${signalsHtml(e)}</td>
+      <td>${procHtml(e.process)}</td></tr>`;
+  }).join("") : `<tr><td colspan="6" class="empty">${
+      S.events.length ? "no events match the current filters" :
+      "no alerts yet — quiet network is good"}</td></tr>`;
+  $("events-count").textContent = rows.length
+    ? `showing ${rows.length} of ${S.events.length}` : "";
+  els("#events-table tbody tr[data-key]").forEach((tr) =>
+    tr.addEventListener("click", () => selectEvent(tr.dataset.key)));
+}
+function selectEvent(key) {
+  S.selectedEventKey = key;
+  els("#events-table tbody tr").forEach((tr) => tr.classList.toggle("sel", tr.dataset.key === key));
+  const e = S.events.find((x) => (x.ts + "|" + x.qname) === key);
+  if (e) renderEventDetail(e);
+}
+function renderEventDetail(e) {
+  const isCanary = /canary/i.test(e.reasons || "");
+  const box = $("event-detail");
+  box.innerHTML = `
+    <dl class="kv">
+      <dt>verdict</dt><dd>${riskBadge(e.risk_level)}${isCanary ? ' <span class="tag canary">canary trap</span>' : ""}</dd>
+      <dt>time</dt><dd>${fmtFull(e.ts)}</dd>
+      <dt>query</dt><dd style="${isCanary ? "color:var(--purple)" : ""};cursor:copy"
+        data-copy="${esc(e.qname)}">${esc(e.qname)}</dd>
+      <dt>source</dt><dd><a href="#/triage/events" data-src="${esc(e.src_ip)}"
+        style="color:var(--accent)">${esc(e.src_ip)}</a></dd>
+      <dt>process</dt><dd>${esc(e.process || "unknown")}</dd>
+      <dt>resolver</dt><dd>${resolverHtml(e.resolver)}</dd>
+      <dt>ATT&amp;CK</dt><dd>${(e.mitre||"").split(",").filter(Boolean)
+        .map((m) => `<span class="tag mitre">${esc(m)}</span>`).join(" ") || "–"}</dd>
+    </dl>
+    <div class="sec-title">Detection reasons</div>
+    <div class="code" style="${isCanary ? "color:var(--purple)" : ""}">${
+      esc((e.reasons || "").split("; ").join("\n")) || "–"}</div>
+    ${e.decoded_preview ? `<div class="sec-title">Decoded payload</div>
+      <div class="code">${esc(e.decoded_preview)}</div>` : ""}
+    <div style="margin-top:14px;display:flex;gap:8px">
+      <button class="btn mini" data-act="src-drill">All from ${esc(e.src_ip)}</button>
+      <button class="btn mini" data-act="copy-json">Copy event JSON</button>
+    </div>`;
+  const drill = el('[data-act="src-drill"]', box);
+  if (drill) drill.addEventListener("click", () => openSourceDrawer(e.src_ip));
+  const cp = el('[data-act="copy-json"]', box);
+  if (cp) cp.addEventListener("click", () => {
+    navigator.clipboard && navigator.clipboard.writeText(JSON.stringify(e, null, 2));
+    toast("Event JSON copied", "ok");
+  });
+}
+
+/* ---------------- sources mode ---------------- */
+function sourcesWithFlags() {
+  // sessions carry the stateful signals; merge flagged counts from stats.top_sources
+  const flaggedBy = {};
+  ((S.stats && S.stats.top_sources) || []).forEach((s) => { flaggedBy[s.src_ip] = s.flagged; });
+  return (S.sessions || []).map((s) => ({ ...s, flagged: flaggedBy[s.src_ip] || 0 }));
+}
+function renderSources() {
+  const rows = sourcesWithFlags();
+  const q = S.triageSearch.trim().toLowerCase();
+  const filtered = q ? rows.filter((s) => (s.src_ip || "").includes(q)) : rows;
+  const { key, dir } = S.sort.sources;
+  filtered.sort((a, b) => {
+    const x = a[key], y = b[key];
+    if (typeof x === "string" || typeof y === "string")
+      return dir * String(x || "").localeCompare(String(y || ""));
+    return dir * ((x ?? -1) - (y ?? -1));
+  });
+  const tb = el("#sources-table tbody");
+  tb.innerHTML = filtered.length ? filtered.map((s) => {
+    const flags = [
+      s.slow_drip ? '<span class="flag mass">MASS</span>' : "",
+      s.beacon ? '<span class="flag beacon">BEACON</span>' : "",
+      s.velocity ? '<span class="flag vel">VELOCITY</span>' : "",
+      s.domain_beacon ? '<span class="flag beacon">D-BEACON</span>' : "",
+      s.resp_answer_bytes > 0 ? `<span class="flag resp">RESP ${s.resp_answer_bytes}B</span>` : "",
+    ].filter(Boolean).join(" ");
+    return `<tr class="sev ${s.flagged ? "HIGH" : "LOW"}" data-src="${esc(s.src_ip)}">
+      <td class="mono">${esc(s.src_ip)}</td>
+      <td class="num">${nfmt(s.query_count)}</td>
+      <td class="num" ${s.flagged ? 'style="color:var(--lvl-high)"' : ""}>${s.flagged}</td>
+      <td class="num">${s.mean_mass ?? "–"}</td>
+      <td class="num">${s.cumulative_mass ?? "–"}</td>
+      <td class="num">${s.interval_cv == null ? "–" : s.interval_cv}</td>
+      <td>${flags || '<span class="faint">clean</span>'}</td>
+      <td class="muted num">${reltime(s.last_seen)}</td></tr>`;
+  }).join("") : `<tr><td colspan="8" class="empty">${
+      S.sessions.length ? "no sources match the filter" :
+      "no sessions — standalone dashboard shows historical events only"}</td></tr>`;
+  $("sources-count").textContent = filtered.length
+    ? `showing ${filtered.length} of ${S.sessions.length}` : "";
+  els("#sources-table tbody tr[data-src]").forEach((tr) =>
+    tr.addEventListener("click", () => openSourceDrawer(tr.dataset.src)));
+}
+
+/* ---------------- source drawer ---------------- */
+function openSourceDrawer(src) {
+  const evs = S.events.filter((e) => e.src_ip === src);
+  const qs = S.queries.filter((q) => q.src_ip === src);
+  const ss = (S.sessions || []).find((s) => s.src_ip === src);
+  const flagged = evs.filter((e) => e.risk_level === "HIGH" || e.risk_level === "CONFIRMED");
+  $("drawer-title").textContent = "Source " + src;
+  $("drawer-body").innerHTML = `
+    <div class="sec-title" style="margin-top:14px">Summary</div>
+    <dl class="kv">
+      <dt>source</dt><dd>${esc(src)}</dd>
+      <dt>events</dt><dd>${evs.length} (${flagged.length} flagged)</dd>
+      <dt>recent queries</dt><dd>${qs.length} in buffer</dd>
+      <dt>sessions</dt><dd>${ss ? "tracked" : "not in session tracker"}</dd>
+      ${ss ? `<dt>mean mass</dt><dd>${ss.mean_mass ?? "–"}</dd>
+      <dt>cum. mass</dt><dd>${ss.cumulative_mass ?? "–"}</dd>
+      <dt>IAT CV</dt><dd>${ss.interval_cv ?? "–"}</dd>` : ""}
+    </dl>
+    <div class="sec-title">Recent events (${evs.length})</div>
+    <div class="code">${evs.slice(0, 40).map((e) =>
+      `${fmtT(e.ts)}  ${e.risk_level.padEnd(9)}  ${e.qname}`).join("\n") || "none"}</div>
+    <div style="margin-top:14px;display:flex;gap:8px">
+      <button class="btn mini" data-act="filter-events">Filter Triage to this source</button>
+    </div>`;
+  const fb = el('[data-act="filter-events"]', $("drawer-body"));
+  if (fb) fb.addEventListener("click", () => {
+    closeDrawer();
+    location.hash = "#/triage/events";
+    setTimeout(() => { navigate(); $("triage-search").value = src; S.triageSearch = src; renderEvents(); }, 0);
+  });
+  $("drawer").classList.add("open");
+  $("drawer").setAttribute("aria-hidden", "false");
+}
+function closeDrawer() {
+  $("drawer").classList.remove("open");
+  $("drawer").setAttribute("aria-hidden", "true");
+}
+
+/* ================================================================
+   FEED (SSE) — buffer when paused / hovered / scrolled away
+   ================================================================ */
+function feedIsAnchored() {
+  const vp = $("viewport");
+  return vp.scrollTop < 40;
+}
+function onLiveEvents(events) {
+  if (S.paused || S.hoverFeed || (S.route.view === "triage" && !feedIsAnchored())) {
+    S.pendingEvents = events.concat(S.pendingEvents).slice(0, 500);
+    updateNewBar();
+    return;
+  }
+  S.events = events.concat(S.events).slice(0, 500);
+  if (S.route.view === "triage" && S.triageMode === "events") renderEvents();
+  if (S.route.view === "overview") { renderMiniAlerts(); renderTunnelHunt(); }
+  updateNavCounts();
+  const last = events[0];
+  if (last) {
+    S.lastAlertTs = last.ts;
+    $("tick-alert").textContent = fmtT(last.ts) + " " + last.risk_level;
+    $("tick-alertwrap").classList.add("alert");
+  }
+}
+function flushPending() {
+  if (!S.pendingEvents.length) return;
+  S.events = S.pendingEvents.concat(S.events).slice(0, 500);
+  S.pendingEvents = [];
+  updateNewBar();
+  if (S.route.view === "triage" && S.triageMode === "events") renderEvents();
+  if (S.route.view === "overview") renderMiniAlerts();
+  updateNavCounts();
+}
+function updateNewBar() {
+  const n = S.pendingEvents.length;
+  const bar = $("triage-new");
+  $("new-count").textContent = n;
+  bar.classList.toggle("show", n > 0 && !S.paused);
+}
+let sse = null;
+function connectStream() {
+  if (!window.EventSource) { setSse("polling"); return; }
+  try { sse && sse.close(); } catch {}
+  sse = new EventSource("/api/stream");
+  sse.onopen = () => setSse("live");
+  sse.onerror = () => setSse("polling");
+  sse.onmessage = (ev) => {
+    let d; try { d = JSON.parse(ev.data); } catch { return; }
+    setSse("live");
+    if (d.queries && d.queries.length) onLiveQueries(d.queries);
+    if (d.events && d.events.length) onLiveEvents(d.events);
+  };
+}
+function setSse(state) {
+  S.sseState = state;
+  const chip = $("sse-chip"), dot = $("sse-dot"), txt = $("sse-state");
+  if (state === "live") { chip.className = "chip live"; dot.className = "live-dot";
+    dot.style.width = "6px"; dot.style.height = "6px"; txt.textContent = "LIVE"; }
+  else { chip.className = "chip warn"; dot.className = "live-dot warn";
+    dot.style.width = "6px"; dot.style.height = "6px"; txt.textContent = "POLLING"; }
+}
+function onLiveQueries(queries) {
+  S.queries = queries.concat(S.queries).slice(0, 500);
+  if (S.route.view === "triage" && S.triageMode === "sources" && S.sessions.length)
+    loadSessions();
+}
+
+/* ================================================================
+   RESPONSE
+   ================================================================ */
+function setResponseMode(mode, updateHash) {
+  S.responseMode = mode === "policy" ? "policy" : "ledger";
+  els("#response-mode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.responseMode));
+  $("response-ledger").style.display = S.responseMode === "ledger" ? "" : "none";
+  $("response-policy").style.display = S.responseMode === "policy" ? "" : "none";
+  if (updateHash !== false) location.hash = "#/response/" + S.responseMode;
+  if (S.responseMode === "policy") { loadSinkhole(); loadAllowlistMute(); }
+}
+function renderResponseKpis() {
+  const rows = S.blocked || [];
+  const drops = rows.filter((r) => r.kind === "source").length;
+  const sinks = rows.filter((r) => r.kind === "domain").length;
+  const hits = (S.sinkhole.hits || []).length;
+  const traps = (S.status && S.status.canaries || []).length;
+  const cards = [
+    { k: "Source drops", v: nfmt(drops), d: "IPTables / netsh", tone: "tone-high" },
+    { k: "Domain sinks", v: nfmt(sinks), d: "hosts-file intercepts", tone: "tone-med" },
+    { k: "Sinkhole hits", v: nfmt(hits), d: "resolutions to sinks", tone: "" },
+    { k: "Canary traps", v: nfmt(traps), d: "armed this run", tone: "tone-ok" },
+  ];
+  $("resp-kpis").innerHTML = cards.map((c) => `
+    <div class="stat ${c.tone}"><div class="k">${c.k}</div>
+      <div class="v">${c.v}</div><div class="d">${c.d}</div></div>`).join("");
+}
+function renderResponseLedger() {
+  const rows = (S.blocked || []).slice().reverse();
+  const tb = el("#resp-table tbody");
+  tb.innerHTML = rows.length ? rows.map((r) => {
+    const isDomain = r.kind === "domain";
+    return `<tr>
+      <td class="muted num">${fmtT(r.ts)}</td>
+      <td>${isDomain ? '<span class="tag sink">DOMAIN SINK</span>'
+                     : '<span class="tag src">SOURCE DROP</span>'}</td>
+      <td class="qname" title="${esc(r.target)}">${esc(r.target)}</td>
+      <td>${r.process ? procHtml(r.process)
+            : `<span class="mono muted">${esc(r.trigger_src || "–")}</span>`}
+          ${r.resolver ? `<span class="faint"> via ${esc(r.resolver)}</span>` : ""}</td>
+      <td class="wrap muted">${esc(r.details || "")}${
+          r.qname && r.qname !== r.target ? ` · for <span class="mono">${esc(r.qname)}</span>` : ""}</td>
+      <td><button class="btn mini danger" data-unblock="${esc(r.target)}">Unblock</button></td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="6" class="empty">no automated responses yet — nothing has tripped the response gate</td></tr>`;
+  $("resp-count").textContent = rows.length ? `${rows.length} ledger entr${rows.length === 1 ? "y" : "ies"}` : "";
+  els("#resp-table [data-unblock]").forEach((b) =>
+    b.addEventListener("click", () => doUnblock(b.dataset.unblock)));
+}
+async function doUnblock(target) {
+  // server reads src_ip — the old UI posted {target} and silently no-op'd.
+  const res = await jsend("/api/unblock", "POST", { src_ip: target });
+  if (res.ok) { toast("Unblocked " + esc(target), "ok"); loadBlocked(); }
+  else toast("Unblock failed for " + esc(target), "err");
+}
+function renderCanaryTraps() {
+  const s = S.status;
+  const list = $("canary-list");
+  const canaries = (s && s.canaries) || null;
+  if (!canaries || !canaries.length) {
+    list.innerHTML = `<div class="empty-state" style="padding:18px">
+      <b>Canary traps are engine-generated</b>
+      <span>Run the live service to arm tripwire domains — any resolution is hard evidence.</span></div>`;
+    $("canary-hint").textContent = "";
+  } else {
+    $("canary-hint").textContent = `${canaries.length} armed this run`;
+    list.innerHTML = canaries.map((c) => `<div class="rowitem">
+      <span class="mono">${esc(c)}</span>
+      <button class="btn mini" data-dig="${esc(c)}">copy dig</button></div>`).join("");
+    els("#canary-list [data-dig]").forEach((b) => b.addEventListener("click", () => {
+      navigator.clipboard && navigator.clipboard.writeText("dig " + b.dataset.dig);
+      toast("Copied dig command", "ok");
+    }));
+  }
+  const hits = S.events.filter((e) => /canary/i.test(e.reasons || ""));
+  $("canary-hits").textContent = hits.length ? hits.map((e) =>
+    `${fmtFull(e.ts)}  ${e.qname}\n    by ${e.process || "unknown"} · via ${e.resolver || "?"}\n    ${e.risk_level} · ${(e.mitre||"").split(",").filter(Boolean).join(" ")}`)
+    .join("\n\n") : "no traps tripped — quiet is good";
+}
+function renderSinkhole() {
+  const doms = S.sinkhole.domains || [], hits = S.sinkhole.hits || [];
+  $("sink-list").innerHTML = doms.length ? doms.map((d) => `<div class="rowitem">
+    <span class="mono">0.0.0.0 ${esc(d)}</span>
+    <span class="faint" style="font-size:10px">sink</span></div>`).join("")
+    : `<span class="faint">none armed right now</span>`;
+  $("sink-hits").innerHTML = hits.length ? hits.slice(0, 20).map((h) => `<div class="rowitem">
+    <span class="mono">${esc(h.qname || h.base || "–")}</span>
+    <span class="faint num">${fmtT(h.ts)}</span></div>`).join("")
+    : `<span class="faint">no interceptions logged</span>`;
+  $("tick-sink").textContent = `${doms.length} domain${doms.length === 1 ? "" : "s"}`;
+}
+function renderAllowlistMute() {
+  $("al-list").innerHTML = (S.allowlist || []).map((x) => `<div class="rowitem">
+    <span class="mono">${esc(x.ip)}</span>
+    ${x.note ? `<span class="faint" style="font-size:10.5px">${esc(x.note)}</span>` : ""}
+    <button class="x" data-del-al="${esc(x.ip)}" title="Remove">✕</button></div>`).join("")
+    || `<span class="faint">empty — no sources exempted</span>`;
+  $("mu-list").innerHTML = (S.muted || []).map((x) => `<div class="rowitem">
+    <span class="mono">${esc(x.domain)}</span>
+    ${x.note ? `<span class="faint" style="font-size:10.5px">${esc(x.note)}</span>` : ""}
+    <button class="x" data-del-mu="${esc(x.domain)}" title="Remove">✕</button></div>`).join("")
+    || `<span class="faint">empty — no domains muted</span>`;
+  els("#al-list [data-del-al]").forEach((b) => b.addEventListener("click", () => delAllowlist(b.dataset.delAl)));
+  els("#mu-list [data-del-mu]").forEach((b) => b.addEventListener("click", () => delMute(b.dataset.delMu)));
+}
+async function addAllowlist() {
+  const ip = $("al-ip").value.trim(); if (!ip) return;
+  const r = await jsend("/api/allowlist", "POST", { ip });
+  if (r.ok) { $("al-ip").value = ""; toast("Allowlisted " + esc(ip), "ok"); loadAllowlistMute(); }
+  else toast("Failed to allowlist " + esc(ip), "err");
+}
+async function delAllowlist(ip) {
+  const r = await jsend("/api/allowlist", "DELETE", { ip });
+  if (r.ok) { toast("Removed " + esc(ip), "ok"); loadAllowlistMute(); }
+}
+async function addMute() {
+  const domain = $("mu-domain").value.trim().toLowerCase(); if (!domain) return;
+  const r = await jsend("/api/mute", "POST", { domain });
+  if (r.ok) { $("mu-domain").value = ""; toast("Muted " + esc(domain), "ok"); loadAllowlistMute(); }
+  else toast("Failed to mute " + esc(domain), "err");
+}
+async function delMute(domain) {
+  const r = await jsend("/api/mute", "DELETE", { domain });
+  if (r.ok) { toast("Unmuted " + esc(domain), "ok"); loadAllowlistMute(); }
+}
+function confirmDialog(title, msg, onYes) {
+  $("confirm-title").textContent = title;
+  $("confirm-msg").textContent = msg;
+  $("confirm-bg").classList.add("open");
+  const close = () => { $("confirm-bg").classList.remove("open");
+    $("confirm-yes").onclick = null; $("confirm-no").onclick = null; };
+  $("confirm-no").onclick = close;
+  $("confirm-yes").onclick = () => { close(); onYes(); };
+}
+function clearSinks() {
+  confirmDialog("Clear domain sinks",
+    "Remove every ExfilTrap-managed sink from the hosts file? Intercepted domains will resolve normally again.",
+    async () => {
+      const r = await jsend("/api/sinkhole", "DELETE");
+      toast(r.ok ? "Domain sinks cleared" : "Failed to clear sinks", r.ok ? "ok" : "err");
+      loadSinkhole(); loadBlocked();
+    });
+}
+
+/* ================================================================
+   SYSTEM
+   ================================================================ */
+function renderSystemView(s, standalone) {
+  const ifaces = Object.entries((s && s.capture_ifaces) || {});
+  $("svc-capture").innerHTML =
+    (ifaces.length ? ifaces.map(([i, v]) => `<dt>${esc(i)}</dt>
+      <dd style="color:${v.ok ? "var(--ok)" : "var(--bad)"}">${v.ok
+        ? `alive · ${v.age_s}s heartbeat` : "SILENT — restart the engine"}</dd>`).join("")
+      : `<dt>capture</dt><dd class="faint">standalone dashboard — no live capture</dd>`) +
+    `<dt>processed</dt><dd>${nfmt(s && s.queries_processed)} queries this session</dd>
+     <dt>watchdog</dt><dd>${s && s.notify_socket ? "systemd sd_notify · active" : "not under systemd"}</dd>`;
+  const pr = (s && s.privileges) || {};
+  $("svc-engine").innerHTML = `
+    <dt>mode</dt><dd>${esc((s && s.mode) || "standalone")}</dd>
+    <dt>uptime</dt><dd>${standalone ? "—" : fmtUp(s && s.uptime_s)}</dd>
+    <dt>root</dt><dd>${pr.is_root ? "yes" : "no"}</dd>
+    <dt>cap_net_raw</dt><dd>${pr.cap_net_raw ? "yes" : "no"}</dd>
+    <dt>can_capture</dt><dd>${s && s.can_capture ? "yes" : "no"}</dd>
+    <dt>can_firewall</dt><dd>${s && s.can_firewall ? "yes" : "no"}</dd>
+    <dt>api port</dt><dd>${esc((s && s.api_port) || "–")}</dd>`;
+  const pol = (s && s.policy) || {};
+  $("svc-policy").innerHTML = `
+    <dt>sinkhole</dt><dd style="color:${pol.sinkhole ? "var(--ok)" : "var(--warn)"}">${
+      pol.sinkhole ? `armed · ${pol.sinkhole_strikes} strike(s) · TTL ${pol.sinkhole_ttl}s`
+                   : "off (enable with --sinkhole)"}</dd>
+    <dt>popularity guard</dt><dd>${pol.popularity_guard ? "Tranco + built-ins · active" : "–"}</dd>
+    <dt>self-host guard</dt><dd style="color:var(--ok)">${pol.self_dos_guard
+      ? `active · own IPs ${(pol.own_ips || []).join(", ") || "auto"} + loopback never firewalled`
+      : "off"}</dd>
+    <dt>canary traps</dt><dd>${(s && s.canaries || []).length} armed</dd>`;
+  $("svc-storage").innerHTML = `
+    <dt>db path</dt><dd class="copyable" data-copy="${esc((s && s.db_path) || "")}">${esc((s && s.db_path) || "–")}</dd>
+    <dt>blocked rows</dt><dd>${nfmt(s && s.blocked_count)}</dd>
+    <dt>sinkhole hits</dt><dd>${nfmt((s && s.sinkhole_hits) ?? (S.sinkhole.hits || []).length)}</dd>
+    <dt>standalone</dt><dd>${standalone ? "yes (read-only DB view)" : "no (engine attached)"}</dd>`;
+}
+
+/* ================================================================
+   DATA LOADS
+   ================================================================ */
+async function loadStats() {
+  const d = await jget("/api/stats");
+  if (d && d.__err) return;
+  S.stats = d;
+  renderKpis(); renderCharts(); renderTunnelHunt(); renderTopSources();
+  renderResponseKpis();
+  updateNavCounts();
+  renderPosture(isStandalone(), isHealthy());
+}
+async function loadStatus() {
+  const s = await jget("/api/status");
+  S.status = (s && s.__err) ? null : s;
+  renderStatus();
+  renderCanaryTraps();
+}
+async function loadEvents() {
+  const d = await jget("/api/events?limit=400");
+  if (d && d.__err) return;
+  S.events = d.events || [];
+  if (S.route.view === "triage" && S.triageMode === "events") renderEvents();
+  if (S.route.view === "overview") renderMiniAlerts();
+  updateNavCounts();
+  if (S.route.view === "response" && S.responseMode === "policy") renderCanaryTraps();
+  if (!S.selectedEventKey && S.events.length) {
+    const first = S.events.find((e) => e.risk_level === "CONFIRMED")
+        || S.events.find((e) => e.risk_level === "HIGH");
+    if (first && S.route.view === "triage") selectEvent(first.ts + "|" + first.qname);
+  }
+}
+async function loadQueries() {
+  const d = await jget("/api/queries?limit=400");
+  if (d && d.__err) return;
+  S.queries = d.queries || [];
+}
+async function loadSessions() {
+  const d = await jget("/api/sessions");
+  if (d && d.__err) { S.sessions = []; }
+  else S.sessions = d.sessions || [];
+  if (S.route.view === "triage" && S.triageMode === "sources") renderSources();
+}
+async function loadBlocked() {
+  const d = await jget("/api/blocked");
+  if (d && d.__err) return;
+  S.blocked = d.blocked || [];
+  renderResponseLedger(); renderResponseKpis();
+  updateNavCounts();
+}
+async function loadSinkhole() {
+  const sk = await jget("/api/sinkhole");
+  if (sk && !sk.__err) { S.sinkhole = { domains: sk.domains || [], hits: sk.hits || [] }; }
+  renderSinkhole();
+}
+async function loadAllowlistMute() {
+  const al = await jget("/api/allowlist");
+  if (al && !al.__err) S.allowlist = al.allowlist || [];
+  const mu = await jget("/api/mute");
+  if (mu && !mu.__err) S.muted = mu.muted || [];
+  renderAllowlistMute();
+}
+function updateNavCounts() {
+  const triage = S.events.filter((e) => e.risk_level === "HIGH" || e.risk_level === "CONFIRMED").length;
+  const tn = $("nav-triage");
+  tn.textContent = triage;
+  tn.className = "count" + (triage ? " hot" : "");
+  const rn = $("nav-response");
+  const n = (S.blocked || []).length;
+  rn.textContent = n; rn.className = "count" + (n ? " warn" : "");
+  $("tick-eng").textContent = isStandalone() ? "standalone" : ((S.status && S.status.mode) || "—");
+}
+const isStandalone = () => !S.status || S.status.service === "standalone-dashboard"
+    || (!S.status.mode && !S.status.capture_ifaces);
+const isHealthy = () => S.status && S.status.capture_healthy !== false && !isStandalone();
+
+/* ================================================================
+   REFRESH LOOP
+   ================================================================ */
+function refresh() {
+  const v = S.route.view;
+  loadStats(); loadStatus();
+  if (v === "overview") loadEvents();
+  if (v === "triage") {
+    if (S.triageMode === "events") { loadEvents(); loadQueries(); }
+    else loadSessions();
+  }
+  if (v === "response") {
+    if (S.responseMode === "ledger") loadBlocked();
+    else { loadSinkhole(); loadAllowlistMute(); loadEvents(); }
+  }
+  if (v === "system") { loadSinkhole(); loadEvents(); }
+}
+function schedule() {
+  setInterval(() => { if (!S.paused && !document.hidden) refresh(); }, 5000);
+  setInterval(() => { if (!S.paused && !document.hidden) loadStatus(); }, 10000);
+  setInterval(() => { $("tick-time").textContent = new Date().toLocaleTimeString(); }, 1000);
+  setInterval(() => { if (isHealthy() && !S.paused) loadStatus(); }, 8000);
+}
+
+/* ================================================================
+   COMMAND PALETTE
+   ================================================================ */
+const NAV_ACTIONS = [
+  { kind: "view", ic: "◧", label: "Overview", hash: "#/overview" },
+  { kind: "view", ic: "≈", label: "Triage — events", hash: "#/triage/events" },
+  { kind: "view", ic: "⣿", label: "Triage — sources", hash: "#/triage/sources" },
+  { kind: "view", ic: "⛨", label: "Response — ledger", hash: "#/response/ledger" },
+  { kind: "view", ic: "⚑", label: "Response — traps & policy", hash: "#/response/policy" },
+  { kind: "view", ic: "⚙", label: "System & health", hash: "#/system" },
+  { kind: "act", ic: "⏸", label: "Toggle pause live updates", act: "pause" },
+  { kind: "act", ic: "◐", label: "Toggle light / dark theme", act: "theme" },
+  { kind: "act", ic: "⇩", label: "Export 2h evidence pack", act: "export" },
+];
+function paletteResults(q) {
+  const out = [];
+  const needle = (q || "").trim().toLowerCase();
+  NAV_ACTIONS.filter((a) => !needle || a.label.toLowerCase().includes(needle))
+    .forEach((a) => out.push({ ...a, kindLabel: a.kind }));
+  if (needle.length >= 2) {
+    S.events.filter((e) => (e.qname || "").toLowerCase().includes(needle))
+      .slice(0, 8).forEach((e) => out.push({ kind: "event", ic: "◇",
+        label: e.qname, sub: `${e.risk_level} · ${e.src_ip}`,
+        hash: "#/triage/events", sel: e.ts + "|" + e.qname }));
+    const seen = new Set();
+    S.events.forEach((e) => { if ((e.src_ip || "").includes(needle) && !seen.has(e.src_ip)) {
+      seen.add(e.src_ip); out.push({ kind: "src", ic: "▤", label: e.src_ip,
+        sub: "source drill-down", drill: e.src_ip }); } });
+  }
+  return out.slice(0, 24);
+}
+function openPalette() {
+  $("palette-bg").classList.add("open");
+  const inp = $("palette-input"); inp.value = S.search || ""; inp.focus(); inp.select();
+  renderPalette();
+}
+function closePalette() { $("palette-bg").classList.remove("open"); }
+let paletteIdx = 0, paletteItems = [];
+function renderPalette() {
+  paletteItems = paletteResults($("palette-input").value);
+  paletteIdx = 0;
+  $("palette-results").innerHTML = paletteItems.length ? paletteItems.map((it, i) => `
+    <div class="res ${i === 0 ? "on" : ""}" data-idx="${i}">
+      <span class="ric">${it.ic}</span>
+      <span class="rmain">${esc(it.label)}${it.sub
+        ? ` <span class="faint" style="font-size:11px">${esc(it.sub)}</span>` : ""}</span>
+      <span class="rkind">${esc(it.kindLabel || it.kind)}</span></div>`).join("")
+    : `<div class="res" style="color:var(--faint)">no matches</div>`;
+  els("#palette-results .res[data-idx]").forEach((n) =>
+    n.addEventListener("click", () => runPalette(paletteItems[+n.dataset.idx])));
+}
+function runPalette(it) {
+  if (!it) return;
+  closePalette();
+  if (it.act === "pause") togglePause();
+  else if (it.act === "theme") toggleTheme();
+  else if (it.act === "export") window.location = "/api/export?window=7200";
+  else if (it.drill) openSourceDrawer(it.drill);
+  else if (it.hash) {
+    location.hash = it.hash;
+    if (it.sel) setTimeout(() => { navigate(); selectEvent(it.sel); }, 0);
+  }
+}
+$("palette-input").addEventListener("input", renderPalette);
+$("palette-input").addEventListener("keydown", (e) => {
+  const res = els("#palette-results .res[data-idx]");
+  if (e.key === "ArrowDown") { e.preventDefault(); paletteIdx = Math.min(paletteIdx + 1, res.length - 1); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); paletteIdx = Math.max(paletteIdx - 1, 0); }
+  else if (e.key === "Enter") { e.preventDefault(); runPalette(paletteItems[paletteIdx]); return; }
+  else if (e.key === "Escape") { closePalette(); return; }
+  else return;
+  res.forEach((n, i) => n.classList.toggle("on", i === paletteIdx));
+  res[paletteIdx] && res[paletteIdx].scrollIntoView({ block: "nearest" });
+});
+$("palette-bg").addEventListener("click", (e) => { if (e.target === $("palette-bg")) closePalette(); });
+$("confirm-bg").addEventListener("click", (e) => { if (e.target === $("confirm-bg")) $("confirm-bg").classList.remove("open"); });
+
+/* ================================================================
+   CONTROLS / SHORTCUTS
+   ================================================================ */
+function togglePause() {
+  S.paused = !S.paused;
+  $("pause-btn").textContent = S.paused ? "Resume" : "Pause";
+  $("pause-btn").classList.toggle("primary", S.paused);
+  if (!S.paused) { flushPending(); refresh(); }
+  updateNewBar();
+}
+function toggleTheme() { S.theme = S.theme === "dark" ? "light" : "dark"; applyTheme(); }
+
+$("pause-btn").addEventListener("click", togglePause);
+$("theme-btn").addEventListener("click", toggleTheme);
+$("drawer-close").addEventListener("click", closeDrawer);
+$("clear-sinks").addEventListener("click", clearSinks);
+$("clear-sinks-2").addEventListener("click", clearSinks);
+$("al-add").addEventListener("click", addAllowlist);
+$("mu-add").addEventListener("click", addMute);
+$("al-ip").addEventListener("keydown", (e) => { if (e.key === "Enter") addAllowlist(); });
+$("mu-domain").addEventListener("keydown", (e) => { if (e.key === "Enter") addMute(); });
+$("triage-density").addEventListener("click", () => {
+  S.density = S.density === "compact" ? "comfortable" : "compact"; applyDensity();
+});
+$("triage-new").addEventListener("click", flushPending);
+$("topsearch").addEventListener("click", openPalette);
+$("global-search").addEventListener("focus", openPalette);
+$("global-search").addEventListener("input", (e) => { S.search = e.target.value; });
+$("triage-search").addEventListener("input", (e) => {
+  S.triageSearch = e.target.value;
+  if (S.triageMode === "events") renderEvents(); else renderSources();
+});
+$("triage-risk").addEventListener("change", (e) => {
+  S.triageRisk = e.target.value; renderEvents(); });
+$("triage-window").addEventListener("change", (e) => {
+  S.triageWindow = +e.target.value; renderEvents(); });
+els("#triage-mode button").forEach((b) =>
+  b.addEventListener("click", () => setTriageMode(b.dataset.mode)));
+els("#response-mode button").forEach((b) =>
+  b.addEventListener("click", () => setResponseMode(b.dataset.mode)));
+els("#range-seg button").forEach((b) => b.addEventListener("click", () => {
+  S.range = +b.dataset.range;
+  els("#range-seg button").forEach((x) => x.classList.toggle("on", x === b));
+  renderCharts();
+  $("flow-sub").textContent = b.textContent + " window";
+}));
+els("#events-table thead th.sortable").forEach((th) => th.addEventListener("click", () => {
+  const k = th.dataset.sort, s = S.sort.events;
+  if (s.key === k) s.dir *= -1; else { s.key = k; s.dir = -1; }
+  els("#events-table thead th").forEach((x) => { x.classList.remove("sorted");
+    const a = el(".arrow", x); if (a) a.textContent = ""; });
+  th.classList.add("sorted"); const ar = el(".arrow", th);
+  if (ar) ar.textContent = s.dir < 0 ? "▼" : "▲";
+  renderEvents();
+}));
+els("#sources-table thead th.sortable").forEach((th) => th.addEventListener("click", () => {
+  const k = th.dataset.sort, s = S.sort.sources;
+  if (s.key === k) s.dir *= -1; else { s.key = k; s.dir = -1; }
+  renderSources();
+}));
+document.addEventListener("keydown", (e) => {
+  const typing = /input|select|textarea/i.test((e.target.tagName || ""));
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault(); openPalette(); return;
+  }
+  if (typing) return;
+  if (e.key === "Escape") { closeDrawer(); closePalette(); $("confirm-bg").classList.remove("open"); }
+  if (e.key === " ") { e.preventDefault(); togglePause(); }
+  if (e.key === "j" || e.key === "k") {
+    const rows = els("#events-table tbody tr[data-key]");
+    if (!rows.length) return;
+    let i = rows.findIndex((r) => r.classList.contains("sel"));
+    i = e.key === "j" ? Math.min(i + 1, rows.length - 1) : Math.max(i - 1, 0);
+    rows.forEach((r) => r.classList.remove("sel"));
+    rows[i].classList.add("sel"); selectEvent(rows[i].dataset.key);
+    rows[i].scrollIntoView({ block: "nearest" });
+  }
+});
+$("viewport").addEventListener("scroll", () => {
+  if (S.route.view === "triage" && feedIsAnchored()) updateNewBar();
+});
+$("triage-events").addEventListener("mouseenter", () => { S.hoverFeed = true; });
+$("triage-events").addEventListener("mouseleave", () => { S.hoverFeed = false; updateNewBar(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !S.paused) refresh(); });
+
+/* ================================================================
+   BOOT
+   ================================================================ */
+applyTheme(); applyDensity();
+navigate();
+schedule();
+connectStream();
+$("flow-sub").textContent = "2h window";
+</script>
+</body>
+</html>

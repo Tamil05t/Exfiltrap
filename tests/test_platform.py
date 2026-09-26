@@ -102,9 +102,12 @@ class TestFactory:
 
 
 class TestPrivileges:
+    # NOTE: os.geteuid does not exist on Windows, so monkeypatch must be
+    # told `raising=False` to CREATE it. Without that, these three tests
+    # raised AttributeError on Windows and the suite could not run there.
     def test_linux_root_implies_all(self, monkeypatch):
         monkeypatch.setattr(priv, "is_windows", lambda: False)
-        monkeypatch.setattr(priv.os, "geteuid", lambda: 0)
+        monkeypatch.setattr(priv.os, "geteuid", lambda: 0, raising=False)
         assert priv.is_root() is True
         assert priv.has_capture_capability() is True
         assert priv.has_firewall_capability() is True
@@ -112,7 +115,7 @@ class TestPrivileges:
     def test_capabilities_detected(self, monkeypatch):
         monkeypatch.setattr(priv, "is_windows", lambda: False)
         monkeypatch.setattr(priv, "is_linux", lambda: True)
-        monkeypatch.setattr(priv.os, "geteuid", lambda: 1000)
+        monkeypatch.setattr(priv.os, "geteuid", lambda: 1000, raising=False)
         # CapEff with only CAP_NET_RAW (bit 13) set.
         monkeypatch.setattr(priv, "_cap_eff_bits", lambda: 1 << 13)
         assert priv.has_capture_capability() is True
@@ -124,7 +127,7 @@ class TestPrivileges:
     def test_unprivileged_user(self, monkeypatch):
         monkeypatch.setattr(priv, "is_windows", lambda: False)
         monkeypatch.setattr(priv, "is_linux", lambda: True)
-        monkeypatch.setattr(priv.os, "geteuid", lambda: 1000)
+        monkeypatch.setattr(priv.os, "geteuid", lambda: 1000, raising=False)
         monkeypatch.setattr(priv, "_cap_eff_bits", lambda: 0)
         assert priv.has_capture_capability() is False
         assert priv.has_firewall_capability() is False

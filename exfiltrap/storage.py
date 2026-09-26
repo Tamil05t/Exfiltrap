@@ -523,6 +523,42 @@ class Storage:
             "sinkhole_hits": [dict(zip(hk, r)) for r in hits],
         }
 
+    # -- retention -------------------------------------------------------
+    # Scopes are deliberately explicit and narrow. The allowlist and the
+    # muted-domain list are NEVER purged by any scope: they are operator
+    # configuration, not captured evidence, and silently forgetting them
+    # would re-enable blocking of hosts the operator deliberately exempted.
+    # Public so the API can validate a requested scope without duplicating
+    # the list (or reaching into a private attribute).
+    PURGE_SCOPES = {
+        "queries": ("queries",),
+        "evidence": ("queries", "risk_events", "sinkhole_hits"),
+        "all": ("queries", "risk_events", "sinkhole_hits", "blocked_ips"),
+    }
+
+    def purge(self, scope: str = "queries") -> dict:
+        """Delete captured rows; returns ``{table: rows_removed}``.
+
+        The AUTOINCREMENT high-water mark is deliberately NOT reset. The
+        dashboard's SSE stream trails ``max_query_id()`` in a closure, so if
+        a purge rewound the ids that cursor would sit above every future row
+        and the live feed would go permanently silent until the page was
+        reloaded. Letting the sequence continue costs nothing.
+        """
+        tables = self.PURGE_SCOPES.get(scope)
+        if tables is None:
+            raise ValueError(f"unknown purge scope {scope!r}; expected one "
+                             f"of {sorted(self.PURGE_SCOPES)}")
+        removed: dict[str, int] = {}
+        with self._lock:
+            self._flush_locked()
+            for table in tables:
+                # `table` comes from the fixed dict above, never from input.
+                cur = self._conn.execute(f"DELETE FROM {table}")
+                removed[table] = max(0, cur.rowcount or 0)
+            self._conn.commit()
+        return removed
+
     def close(self) -> None:
         with self._lock:
             self._flush_locked()
@@ -541,6 +577,12 @@ class NullStorage:
     def totals(self) -> dict:
         return {"queries": 0, "flagged": 0, "confirmed": 0, "blocked": 0,
                 "sinkhole_hits": 0}
+
+    def purge(self, scope: str = "queries") -> dict:
+        return {}
+
+    # Same scope names as Storage so the API can validate against either.
+    PURGE_SCOPES = {"queries": (), "evidence": (), "all": ()}
 
     def recent_queries(self, limit=50) -> list: return []
     def recent_events(self, limit=50) -> list: return []

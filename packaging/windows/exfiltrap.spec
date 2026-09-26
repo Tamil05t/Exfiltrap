@@ -40,13 +40,30 @@ a = Analysis(
         "sklearn.ensemble", "sklearn.ensemble._forest",
         "sklearn.tree", "sklearn.tree._classes", "sklearn.tree._utils",
         "sklearn.utils._weight_vector", "sklearn.utils._seq_dataset",
+        # scipy lazy submodules the pickle import graph touches at model-load
+        # time. These are NOT discoverable statically, so PyInstaller drops
+        # them and the frozen engine dies on load_rf_model() with
+        # "dependencies are missing". Kept identical to the Linux spec.
+        "scipy._external.array_api_compat.numpy",
+        "scipy._external.array_api_compat.numpy.fft",
+        "scipy.fft",
+        "scipy.integrate",
+        "scipy.linalg",
+        "scipy.sparse",
         "exfiltrap.service",
         "exfiltrap.winservice",
         "exfiltrap.dashboard.app",
+        # pywin32 service stack. pywintypes and win32api are imported
+        # indirectly (dynamically by name) inside win32serviceutil and
+        # servicemanager, so PyInstaller's static analysis misses them and
+        # the frozen `winservice install` dies with
+        # "No module named 'pywintypes'".
+        "win32api",
         "win32serviceutil",
         "servicemanager",
         "win32event",
         "win32service",
+        "pywintypes",
     ],
     hookspath=[],
     hooksconfig={},

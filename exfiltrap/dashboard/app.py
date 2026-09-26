@@ -29,7 +29,9 @@ def create_app(db_path=None, status_provider=None, sessions_provider=None,
     (``list``/``add``/``remove``) that let the service apply changes to its
     LIVE state; the DB is updated either way and stays the source of truth.
     ``sinkhole_provider`` exposes the domain sinkhole's live entries
-    (``list``) and full clear (``clear``) for the responses console.
+    (``list``), its true armed state (``enabled``), a full clear
+    (``clear``) and live arming/disarming (``set``) for the responses
+    console.
     """
     app = Flask(__name__)
     app.config["DB_PATH"] = str(db_path if db_path is not None else config.DB_PATH)
@@ -48,16 +50,23 @@ def create_app(db_path=None, status_provider=None, sessions_provider=None,
 
     @app.route("/api/stats")
     def stats():
-        # The dashboard polls this route every few seconds and each call
-        # aggregates the whole queries table (measured 1.4 s at ~100k rows
-        # on the shipped build) — under several pollers that alone
-        # saturates the API and verdict reads start timing out. A 2 s TTL
-        # cache collapses concurrent/rapid polls onto one computation.
+        # Each call aggregates the whole queries table (measured 1.4 s at
+        # ~100k rows on the shipped build) — under several pollers that alone
+        # saturates the API and verdict reads start timing out, so rapid
+        # polls are collapsed onto one computation.
+        #
+        # The TTL must stay WELL BELOW the console's poll interval. It was
+        # 2.0 s against a 2 s client poll, which made consecutive polls
+        # alternate between fresh and cache-hit: the counters sat still for
+        # one beat and then jumped, which reads as "the numbers are stuck /
+        # updating slowly". 0.5 s still absorbs a burst of concurrent
+        # pollers (several tabs, a page load firing every route at once)
+        # without ever serving anything older than half a second.
         storage: Storage = app.config["STORAGE"]
         now = time.monotonic()
         cache = app.config.setdefault("_STATS_CACHE", {})
         hit = cache.get("v")
-        if hit is not None and now - hit[0] < 2.0:
+        if hit is not None and now - hit[0] < 0.5:
             return jsonify(hit[1])
         body = dict(
             totals=storage.totals(),
@@ -73,8 +82,15 @@ def create_app(db_path=None, status_provider=None, sessions_provider=None,
     @app.route("/api/status")
     def status():
         if status_provider is None:
-            return jsonify(service="standalone-dashboard")
-        return jsonify(status_provider())
+            return jsonify(service="standalone-dashboard",
+                           db_path=app.config.get("DB_PATH"))
+        body = dict(status_provider())
+        # The System → Storage card shows where the evidence lives. The
+        # engine's own privilege report does not carry the DB path, and the
+        # dashboard is the component that actually knows it, so merge it in
+        # here instead of leaving the row blank.
+        body.setdefault("db_path", app.config.get("DB_PATH"))
+        return jsonify(body)
 
     @app.route("/api/sessions")
     def sessions():
@@ -175,12 +191,46 @@ def create_app(db_path=None, status_provider=None, sessions_provider=None,
     # ---- sinkhole console + evidence export ------------------------------
     @app.route("/api/sinkhole")
     def sinkhole_list():
-        live = (sinkhole_provider or {}).get("list")
-        domains = live() if live else []
+        prov = sinkhole_provider or {}
+        live = prov.get("list")
+        is_on = prov.get("enabled")
         storage: Storage = app.config["STORAGE"]
-        return jsonify(domains=domains,
+        return jsonify(domains=live() if live else [],
                        hits=storage.sinkhole_hits_recent(100),
-                       enabled=bool(live))
+                       # This must report the REAL state. The provider dict
+                       # exists even when the sinkhole is disarmed, so the
+                       # old bool(provider) check always said True and the
+                       # console showed an armed sinkhole that was not there.
+                       enabled=bool(is_on()) if is_on else False,
+                       armable=bool(prov.get("set")))
+
+    @app.route("/api/sinkhole", methods=["POST"])
+    def sinkhole_set():
+        """Arm or disarm the domain sinkhole from the console.
+
+        ``{"enabled": true}`` arms it (hosts-file 0.0.0.0 intercepts for
+        convicted domains), ``{"enabled": false}`` disarms it and removes
+        every ExfilTrap-managed hosts entry. Applies live — the policy picks
+        up the change on the next query, no restart.
+        """
+        prov = sinkhole_provider or {}
+        setter = prov.get("set")
+        if setter is None:
+            return jsonify(ok=False, enabled=False,
+                           error="sinkhole control is only available when "
+                                 "the engine runs in service mode"), 501
+        body = request.get_json(silent=True) or {}
+        try:
+            ok = bool(setter(body))
+        except Exception as exc:  # noqa: BLE001 — report it to the console
+            return jsonify(ok=False, error=str(exc)), 500
+        live = prov.get("list")
+        is_on = prov.get("enabled")
+        storage: Storage = app.config["STORAGE"]
+        return jsonify(ok=ok,
+                       enabled=bool(is_on()) if is_on else ok,
+                       domains=live() if live else [],
+                       hits=storage.sinkhole_hits_recent(100))
 
     @app.route("/api/sinkhole", methods=["DELETE"])
     def sinkhole_clear():
@@ -190,8 +240,16 @@ def create_app(db_path=None, status_provider=None, sessions_provider=None,
 
     @app.route("/api/stream")
     def stream():
-        """Server-Sent Events: new queries + alerts pushed ~1s after they
+        """Server-Sent Events: new queries + alerts pushed as soon as they
         land, so the console feels live without hammering /api/queries.
+
+        The poll interval is deliberately short. At 1.0 s a burst of DNS
+        lookups (a page load fires 10-20 resolutions inside ~50 ms) all
+        landed in the SAME frame, so the console appeared to sit still and
+        then dump a dozen rows at once. A 0.25 s tick keeps the batch size
+        down to a handful, which reads as a stream instead of a dump. The
+        cost is one indexed `id > ?` lookup four times a second — trivial
+        for SQLite.
 
         Reads trail the DB ids (the pipeline is the only writer), which
         keeps this decoupled from the detection code and working in
@@ -224,7 +282,7 @@ def create_app(db_path=None, status_provider=None, sessions_provider=None,
                     raise
                 except Exception:  # noqa: BLE001 — the stream must survive
                     yield ": err\n\n"
-                time.sleep(1.0)
+                time.sleep(0.25)
 
         return Response(gen(), mimetype="text/event-stream",
                         headers={"Cache-Control": "no-cache",
@@ -244,6 +302,41 @@ def create_app(db_path=None, status_provider=None, sessions_provider=None,
         window = min(max(window, 60.0), 7 * 24 * 3600.0)
         body = storage.export_json(window_seconds=window)
         return Response(json.dumps(body, indent=2), mimetype="application/json")
+
+    @app.route("/api/purge", methods=["POST"])
+    def purge():
+        """Delete captured evidence — the retention control on System.
+
+        Destructive, so it is POST-only AND requires the caller to echo the
+        scope back as ``confirm``. A stray request, a form post from another
+        origin, or a truncated body can therefore never wipe the log.
+
+        Scopes (see ``Storage._PURGE_SCOPES``): ``queries`` (the raw query
+        log only — triage events and the response ledger survive),
+        ``evidence`` (queries + risk events + sinkhole hits) and ``all``
+        (those plus the response ledger). The operator allowlist and the
+        muted-domain list are never touched by any scope.
+        """
+        from flask import request as _req
+
+        storage: Storage = app.config["STORAGE"]
+        body = _req.get_json(silent=True) or {}
+        scope = str(body.get("scope") or "queries")
+        if str(body.get("confirm") or "") != scope:
+            return jsonify(ok=False,
+                           error="confirmation missing — send "
+                                 '{"scope": "<scope>", "confirm": "<scope>"}'), 400
+        if scope not in storage.PURGE_SCOPES:
+            return jsonify(ok=False,
+                           error=f"unknown scope {scope!r}"), 400
+        try:
+            removed = storage.purge(scope)
+        except Exception as exc:  # noqa: BLE001 — report, never 500 silently
+            return jsonify(ok=False, error=str(exc)), 500
+        # Drop the aggregate cache so the counters reflect the purge on the
+        # very next poll instead of showing the old totals for one more beat.
+        app.config.setdefault("_STATS_CACHE", {}).pop("v", None)
+        return jsonify(ok=True, scope=scope, removed=removed)
 
     @app.teardown_appcontext
     def _close(_exc):

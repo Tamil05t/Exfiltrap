@@ -54,24 +54,31 @@ Output in `src-tauri/target/release/bundle/`:
 
 Generate icons first (one-time): see `src-tauri/icons/README.md`.
 
-## Linux distribution formats (and why the AppImage is gone)
+## Linux distribution formats
 
 | format | webview | targets |
 |---|---|---|
 | `.deb` | **system** WebKitGTK 4.1 | Debian 13+, Ubuntu 24.04+, Kali |
 | **PKGBUILD** (`packaging/arch/`) | **system** WebKitGTK 4.1, compiled on install | Arch, CachyOS, EndeavourOS, Manjaro |
 | **Flatpak** (`packaging/flatpak/`) | runtime-pinned WebKitGTK (`org.gnome.Platform//49`) | every distro with Flatpak |
+| **AppImage** (`packaging/appimage/`) | **bundled** WebKitGTK snapshot | single-file, compatible hosts (see note) |
 
-The AppImage was retired in v1.4.0 after a week of live failures proved it
-structurally unsound for a webview app: a bundled WebKitGTK/GLib snapshot
-collides with rolling-release system libraries (glib symbol errors, blank
-windows on Kali/Debian 13), and WebKit's EGL path cannot initialize in
-GPU-less VMs at all (upstream tauri#11994). Both replacement formats solve
-it the same way — the shell always renders against a webview managed by
-the target system or runtime, never a frozen snapshot.
+The AppImage bundles its own WebKitGTK/GLib snapshot, which can collide
+with rolling-release system libraries (glib symbol errors, blank windows on
+Kali/Debian 13), and WebKit's EGL path cannot initialize in GPU-less VMs
+(upstream tauri#11994). It is therefore the *fallback* format: prefer the
+`.deb`, PKGBUILD or Flatpak, which always render against a system- or
+runtime-managed webview.
 
-Flatpak privilege note: the sandbox cannot reach the host polkit, so the
-Start button escapes deliberately via `flatpak-spawn --host pkexec`
-(see the `FLATPAK_ID` branch in `src-tauri/src/main.rs` and the manifest's
-`--talk-name=org.freedesktop.Flatpak`); the engine runs on the host with
-root + capture rights, exactly like the deb's staged engine.
+In v1.4.0 the AppImage build was fixed so it is no longer a dead splash:
+the bundled engine now lands at the path Tauri actually resolves
+(`$APPDIR/usr/lib/ex-fil-trap/resources/exfiltrap-engine`) and the shell
+**auto-starts** it on launch (see `build-appimage.sh` and the auto-start
+path in `src-tauri/src/main.rs`).
+
+Flatpak privilege note: the sandbox cannot reach the host polkit, so
+auto-start / the Start button escapes deliberately via
+`flatpak-spawn --host pkexec` (see the `FLATPAK_ID` branch in
+`src-tauri/src/main.rs` and the manifest's `--talk-name=org.freedesktop.Flatpak`);
+the engine runs on the host with root + capture rights, exactly like the
+deb's staged engine.

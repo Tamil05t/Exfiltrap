@@ -15,6 +15,13 @@ from exfiltrap.service import (CaptureSupervisor, ServiceRuntime,
                                SystemdWatchdog)
 from exfiltrap.storage import NullStorage, Storage
 
+# Windows' socket module has no AF_UNIX, so everything that binds a Unix
+# domain socket (the syslog alerter + the systemd sd_notify watchdog) is
+# POSIX-only. Without these skips the whole file errored on Windows.
+requires_af_unix = pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX"),
+    reason="Unix domain sockets (socket.AF_UNIX) are POSIX-only")
+
 
 def assessment(risk="CONFIRMED", ip="10.99.0.2", prob=0.99):
     return SimpleNamespace(
@@ -28,6 +35,7 @@ class TestAlerting:
     def test_null_alerter(self):
         assert NullAlerter().send(assessment()) is False
 
+    @requires_af_unix
     def test_syslog_sends_structured_line(self, tmp_path):
         sock_path = str(tmp_path / "syslog.sock")
         server = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -41,10 +49,12 @@ class TestAlerting:
         assert "prob=0.990" in line and "confirmed=1" in line
         server.close()
 
+    @requires_af_unix
     def test_unavailable_syslog_is_silent_noop(self):
         alerter = SyslogAlerter(address="/nonexistent/syslog/sock")
         assert alerter.send(assessment()) is False
 
+    @requires_af_unix
     def test_factory(self):
         assert isinstance(make_alerter("none"), NullAlerter)
         assert isinstance(make_alerter("syslog"), SyslogAlerter)
@@ -205,6 +215,7 @@ class TestWatchdog:
         server.settimeout(3)
         return sock_path, server
 
+    @requires_af_unix
     def test_ready_and_watchdog_pings(self, tmp_path, monkeypatch):
         sock_path, server = self._notify_socket(tmp_path)
         monkeypatch.setenv("NOTIFY_SOCKET", sock_path)
@@ -220,6 +231,7 @@ class TestWatchdog:
             wd.stop()
             server.close()
 
+    @requires_af_unix
     def test_stalled_heartbeat_suspends_pings(self, tmp_path, monkeypatch):
         sock_path, server = self._notify_socket(tmp_path)
         monkeypatch.setenv("NOTIFY_SOCKET", sock_path)
@@ -241,6 +253,7 @@ class TestWatchdog:
             wd.stop()
             server.close()
 
+    @requires_af_unix
     def test_beat_resumes_pings(self, tmp_path, monkeypatch):
         sock_path, server = self._notify_socket(tmp_path)
         monkeypatch.setenv("NOTIFY_SOCKET", sock_path)
@@ -281,6 +294,7 @@ class TestWatchdog:
         rt.beat()
         assert rt.heartbeat_age() < 1
 
+    @requires_af_unix
     def test_watchdog_pings_while_any_capture_iface_alive(
             self, tmp_path, monkeypatch):
         # Partial capture loss (one of two ifaces) must NOT suspend pings:
@@ -310,6 +324,7 @@ class TestWatchdog:
             wd.stop()
             server.close()
 
+    @requires_af_unix
     def test_watchdog_suspends_when_every_iface_stale(
             self, tmp_path, monkeypatch):
         # Total capture blindness = process-alive-but-blind: pings stop so
@@ -568,6 +583,7 @@ class TestPolicyEngine:
 
 
 class TestAlertDedup:
+    @requires_af_unix
     def test_one_line_per_src_level_per_hour(self):
         import socket as s
 

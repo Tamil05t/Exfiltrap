@@ -379,6 +379,51 @@ def resolve_interfaces(cli_iface: str | None) -> list[str] | None:
     return [cli_iface]
 
 
+class SinkholeSlot:
+    """Mutable holder for the domain sinkhole.
+
+    The sinkhole used to be created once at boot from ``--sinkhole`` and was
+    then immutable, so the console could only ever *clear* sinks — there was
+    no way to arm the response without restarting the service. The slot lets
+    ``POST /api/sinkhole`` arm/disarm it at runtime while the policy and the
+    pipeline keep reading a single attribute.
+    """
+
+    def __init__(self, hosts_path: str, ttl: float, strikes: int) -> None:
+        self.hosts_path = hosts_path
+        self.ttl = ttl
+        self.strikes = strikes
+        self.obj = None
+
+    def arm(self) -> bool:
+        if self.obj is None:
+            from exfiltrap.mitigation import DomainSinkhole
+
+            self.obj = DomainSinkhole(
+                hosts_path=self.hosts_path,
+                ttl=self.ttl,
+                strikes=self.strikes,
+            )
+        return True
+
+    def disarm(self) -> bool:
+        """Detach the sinkhole, clearing every managed hosts entry."""
+        obj, self.obj = self.obj, None
+        if obj is not None:
+            try:
+                obj.cleanup()
+            except Exception as exc:  # noqa: BLE001 — the hosts file must
+                # never stay poisoned just because cleanup hiccupped.
+                log.warning("sinkhole cleanup on disarm failed: %s", exc)
+        return True
+
+    def blocked_domains(self) -> list[str]:
+        return list(self.obj.blocked_domains()) if self.obj else []
+
+    def clear(self) -> int:
+        return self.obj.cleanup() if self.obj else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python3 -m exfiltrap.service",
@@ -524,19 +569,19 @@ def main(argv: list[str] | None = None) -> int:
         storage.allowlist_add(ip, note="cli --allowlist")
     for dom in [d for d in args.mute_domain.split(",") if d]:
         storage.muted_add(dom, note="cli --mute-domain")
-    sinkhole = None
+    sinkhole_slot = SinkholeSlot(
+        hosts_path=os.environ.get("EXFILTRAP_HOSTS_FILE", "/etc/hosts"),
+        ttl=args.block_ttl or 3600.0,
+        strikes=args.sinkhole_strikes,
+    )
     if args.sinkhole:
-        from exfiltrap.mitigation import DomainSinkhole
-        sinkhole = DomainSinkhole(
-            hosts_path=os.environ.get("EXFILTRAP_HOSTS_FILE", "/etc/hosts"),
-            ttl=args.block_ttl or 3600.0,
-            strikes=args.sinkhole_strikes,
-        )
+        sinkhole_slot.arm()
         log.info("domain sinkhole enabled: CONFIRMED hostnames sink "
                  "immediately, probability-only verdicts need %d strikes on "
                  "one base domain; popular domains are refused; entries are "
                  "answered 0.0.0.0 via %s (TTL %.0fs)",
-                 sinkhole.strikes, sinkhole.hosts_path, sinkhole.ttl)
+                 sinkhole_slot.strikes, sinkhole_slot.hosts_path,
+                 sinkhole_slot.ttl)
     # Self-DoS guard: the policy never firewalls this machine's own
     # addresses — on a single-host deployment every query's source IS the
     # operator, so the domain response is the surgical action instead.
@@ -547,7 +592,7 @@ def main(argv: list[str] | None = None) -> int:
         mitigation,
         allowlist=[a["ip"] for a in storage.allowlist_list()],
         block_ttl=args.block_ttl or 1e18,
-        sinkhole=sinkhole,
+        sinkhole=sinkhole_slot.obj,
         own_ips=own_ips,
     )
     pipeline = ExfilTrapPipeline(
@@ -592,8 +637,8 @@ def main(argv: list[str] | None = None) -> int:
         def _finalizer() -> None:
             time.sleep(5.0)
             try:
-                if sinkhole is not None:
-                    freed = sinkhole.cleanup()
+                if sinkhole_slot.obj is not None:
+                    freed = sinkhole_slot.clear()
                     if freed:
                         log.info("shutdown: sinkhole cleared %d hostnames",
                                  freed)
@@ -708,17 +753,36 @@ def main(argv: list[str] | None = None) -> int:
     def _live_status() -> dict:
         body = runtime.status()
         body["canaries"] = canary_domains
+        sh = sinkhole_slot.obj
         body["policy"] = {
-            "sinkhole": sinkhole is not None,
-            "sinkhole_strikes": sinkhole.strikes if sinkhole else None,
+            "sinkhole": sh is not None,
+            "sinkhole_armable": True,
+            "sinkhole_strikes": sh.strikes if sh else sinkhole_slot.strikes,
             "sinkhole_ttl": args.block_ttl or 3600.0,
-            "popularity_guard": sinkhole is not None,
+            "popularity_guard": sh is not None,
             "own_ips": sorted(own_ips),
             "self_dos_guard": True,
         }
-        if sinkhole is not None:
-            body["sinkhole_domains"] = sinkhole.blocked_domains()
+        if sh is not None:
+            body["sinkhole_domains"] = sh.blocked_domains()
         return body
+
+    def _sinkhole_set(payload: dict) -> bool:
+        """Arm or disarm the domain sinkhole live, from the console."""
+        want = bool((payload or {}).get("enabled", True))
+        if want:
+            sinkhole_slot.arm()
+            log.info("domain sinkhole ARMED from the console (hosts=%s, "
+                     "TTL %.0fs, strikes %d)", sinkhole_slot.hosts_path,
+                     sinkhole_slot.ttl, sinkhole_slot.strikes)
+        else:
+            sinkhole_slot.disarm()
+            log.info("domain sinkhole DISARMED from the console — every "
+                     "managed hosts entry removed")
+        # The policy reads this attribute on every decision, so the change
+        # takes effect on the very next query with no restart.
+        mitigation.sinkhole = sinkhole_slot.obj
+        return True
 
     app = create_app(args.db, status_provider=_live_status,
                      sessions_provider=_sessions_snapshot,
@@ -729,10 +793,11 @@ def main(argv: list[str] | None = None) -> int:
                      mute_provider={"list": storage.muted_list,
                                     "add": _mute_add,
                                     "remove": _mute_remove},
-                     sinkhole_provider={"list": (lambda: sinkhole.blocked_domains()
-                                                 if sinkhole else []),
-                                        "clear": (lambda: sinkhole.cleanup()
-                                                  if sinkhole else 0)})
+                     sinkhole_provider={"list": sinkhole_slot.blocked_domains,
+                                        "clear": sinkhole_slot.clear,
+                                        "enabled": (lambda:
+                                                    sinkhole_slot.obj is not None),
+                                        "set": _sinkhole_set})
     log.info("API + dashboard on http://%s:%d (Ctrl+C to stop)",
              args.api_host, args.api_port)
     try:

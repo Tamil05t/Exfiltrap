@@ -78,6 +78,17 @@ def has_firewall_capability() -> bool:
 
 
 def privilege_report() -> dict:
+    if is_windows():
+        hint = (
+            "run via the installed ExFilTrapSvc Windows Service (started by "
+            "ExFilTrap-Setup.exe), or in an elevated prompt: "
+            "exfiltrap.exe service --iface <adapter>"
+        )
+    else:
+        hint = (
+            "run via `systemctl start exfiltrap` (the service carries "
+            "CAP_NET_RAW/CAP_NET_ADMIN), or with sudo for interactive use"
+        )
     return {
         "platform": platform.system(),
         "python": sys.version.split()[0],
@@ -89,10 +100,7 @@ def privilege_report() -> dict:
         },
         "can_capture": has_capture_capability(),
         "can_modify_firewall": has_firewall_capability(),
-        "capture_hint": (
-            "run via `systemctl start exfiltrap` (the service carries "
-            "CAP_NET_RAW/CAP_NET_ADMIN), or with sudo for interactive use"
-        ),
+        "capture_hint": hint,
     }
 
 

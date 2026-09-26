@@ -16,7 +16,15 @@
 ; free installer also works interactively).
 
 #define MyAppName "ExfilTrap"
-#define MyAppVersion "1.0.0"
+; Version is overridable from the command line (CI passes the pushed tag):
+;   iscc -DMyAppVersion=1.4.0 packaging\windows\exfiltrap.iss
+; The #ifndef guard is REQUIRED — ISCC -D emulates `#define public`, and a
+; bare #define here would collide with it ("Symbol already defined"),
+; failing the compile. Without the guard CI could never override the
+; version and every release installer silently shipped this default.
+#ifndef MyAppVersion
+  #define MyAppVersion "1.4.0"
+#endif
 #define MyAppPublisher "ExfilTrap Project"
 #define MyAppExeName "exfiltrap.exe"
 

@@ -35,35 +35,49 @@ INI_PATH = os.path.join(INI_DIR, "service.ini")
 
 
 def service_args() -> list[str]:
-    """Build the service-mode argv from service.ini (falls back to demo)."""
+    """Build the service-mode argv from service.ini.
+
+    The INSTALLED product is always live capture (per the project's
+    root-only, no-demo ground rule), so the resulting argv never selects a
+    demo mode. ``iface = auto`` (what the installer writes) is resolved to
+    the real default-route adapter here, at service start.
+    """
     import configparser
 
     cp = configparser.ConfigParser()
     cp.read(INI_PATH)
-    if cp.has_section("service") and cp.get("service", "iface", fallback=None):
-        return ["--iface", cp.get("service", "iface"),
-                "--mitigation", cp.get("service", "mitigation", "log"),
-                ] + (["--execute"] if cp.getboolean(
-                    "service", "execute", fallback=False) else [])
-    # No configured interface: pick the first active adapter (root service
-    # runs live capture — the installed product is always live).
-    iface = cp.get("service", "iface", fallback=None) if cp.has_section("service") else None
-    if not iface or iface.lower() == "auto":
+    has = cp.has_section("service")
+    iface = cp.get("service", "iface", fallback="") if has else ""
+    mitigation = cp.get("service", "mitigation", fallback="log") if has else "log"
+    execute = cp.getboolean("service", "execute", fallback=False) if has else False
+
+    # Unset, blank, or the installer's "auto" -> detect the default-route
+    # adapter now. This is the ONE place auto is resolved; the engine also
+    # understands --iface auto, but resolving here means a failure surfaces
+    # in the service log with a concrete candidate list.
+    if not iface or iface.strip().lower() == "auto":
         iface = _first_interface()
-    return ["--iface", iface,
-            "--mitigation", cp.get("service", "mitigation", "log")] + (
-            ["--execute"] if cp.getboolean("service", "execute",
-                                           fallback=False) else [])
+    return ["--iface", iface, "--mitigation", mitigation] + (
+        ["--execute"] if execute else [])
 
 
 def _first_interface() -> str:
-    """The adapter carrying the default route (Windows)."""
+    """The adapter carrying the default route (Windows).
+
+    Falls back to the first UP adapter, then to the historical "Ethernet"
+    literal, so a service start never dies on detection alone — the engine
+    itself reports a clear error if the name is wrong, and the operator can
+    correct service.ini.
+    """
     try:
         from exfiltrap import netif
 
         name = netif.default_interface()
         if name:
             return name
+        up = netif.list_interfaces()
+        if up:
+            return up[0]
     except Exception:
         pass
     return "Ethernet"
@@ -126,14 +140,22 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     cls = _get_service_class()
+    import win32service
     import win32serviceutil
 
     cmd = argv[0]
     if cmd == "install":
-        win32serviceutil.InstallService(None, cls._svc_name_,
-                                        cls._svc_display_name_,
-                                        description=cls._svc_description_,
-                                        starttype=2)  # auto start at boot
+        # NOTE: pywin32's keyword is `startType` (camelCase). Passing
+        # `starttype` (all lowercase) raises TypeError and aborts the
+        # install, so the Windows service never registers — the single
+        # reason the packaged Windows product used to fail at deploy time.
+        # SERVICE_AUTO_START == 2. `pythonClassString=None` is intentional:
+        # the frozen exe hosts itself (SCM launches it with no args and we
+        # dispatch), so no PythonClass registry value is needed.
+        win32serviceutil.InstallService(
+            None, cls._svc_name_, cls._svc_display_name_,
+            description=cls._svc_description_,
+            startType=win32service.SERVICE_AUTO_START)
         print(f"installed {SERVICE_NAME} (auto-start). Configure "
               f"{INI_PATH} then: exfiltrap winservice start")
         return 0

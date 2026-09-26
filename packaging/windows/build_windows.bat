@@ -21,6 +21,9 @@ set SIGN_CERT=
 set SIGN_TSA=http://timestamp.digicert.com
 if defined SIGN_CERT set SIGN_CMD=signtool sign /fd SHA256 /tr %SIGN_TSA% /f "%SIGN_CERT%"
 
+REM === version (must match desktop/src-tauri/tauri.conf.json) ===
+if not defined APPVER set APPVER=1.4.0
+
 if not exist .venv (python -m venv .venv)
 call .venv\Scripts\activate.bat
 
@@ -38,12 +41,14 @@ if defined SIGN_CMD (
 echo === building installer (requires Inno Setup 6: https://jrsoftware.org/isinfo.php)
 where iscc >nul 2>nul
 if %errorlevel%==0 (
-  iscc packaging\windows\exfiltrap.iss
+  iscc /DMyAppVersion=%APPVER% packaging\windows\exfiltrap.iss
   if defined SIGN_CMD %SIGN_CMD% dist\ExfilTrap-Setup.exe
   echo Installer: dist\ExfilTrap-Setup.exe
 ) else (
   echo Inno Setup (iscc) not found - run the service directly from dist\exfiltrap:
-  echo   dist\exfiltrap\exfiltrap.exe service --demo
+  echo   dist\exfiltrap\exfiltrap.exe service --iface "Ethernet"
+  echo   dist\exfiltrap\exfiltrap.exe dashboard        ^(standalone UI^)
+  echo   dist\exfiltrap\exfiltrap.exe winservice install  ^(elevated, then: start^)
 )
 
 endlocal
