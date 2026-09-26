@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ExfilTrap Console — v2 mockup</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0a0e18;         /* app background */
+    --side: #0c1120;       /* sidebar */
+    --panel: #101627;      /* card surface */
+    --panel2: #0d1322;     /* inset surface */
+    --border: #1c2438;
+    --border-soft: #161d2e;
+    --text: #dbe2ee;
+    --dim: #7d8aa3;
+    --faint: #55617a;
+    --accent: #4f8ff7;
+    --accent-soft: rgba(79, 143, 247, .13);
+    --red: #f0524a;
+    --red-soft: rgba(240, 82, 74, .13);
+    --amber: #e2a336;
+    --amber-soft: rgba(226, 163, 54, .13);
+    --green: #40c46a;
+    --green-soft: rgba(64, 196, 106, .13);
+    --purple: #a78bfa;
+    --purple-soft: rgba(167, 139, 250, .14);
+    --cyan: #39c5cf;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: "Inter", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; font-family: var(--sans); font-size: 13px;
+    background: var(--bg); color: var(--text); overflow: hidden;
+  }
+  .mono { font-family: var(--mono); }
+
+  /* ================= app shell: fills the viewport, always ============ */
+  .app { display: grid; grid-template-columns: 228px 1fr; height: 100dvh; }
+
+  /* ---------------- sidebar ---------------- */
+  .side {
+    background: var(--side); border-right: 1px solid var(--border-soft);
+    display: flex; flex-direction: column; padding: 14px 12px; gap: 4px;
+    overflow-y: auto;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; padding: 4px 8px 14px; }
+  .logo-badge {
+    width: 34px; height: 34px; border-radius: 9px; flex: none;
+    background: linear-gradient(135deg, #2563eb, #4f8ff7);
+    display: grid; place-items: center; font-size: 16px;
+    box-shadow: 0 4px 18px rgba(37, 99, 235, .35);
+  }
+  .logo b { font-size: 14.5px; letter-spacing: .02em; }
+  .logo small { display: block; color: var(--faint); font-size: 10px;
+                letter-spacing: .14em; text-transform: uppercase; }
+  .nav-label { color: var(--faint); font-size: 10px; font-weight: 700;
+               letter-spacing: .14em; text-transform: uppercase;
+               padding: 14px 10px 6px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 7px 10px;
+    border-radius: 8px; color: var(--dim); cursor: pointer; font-weight: 500;
+    border: 1px solid transparent; user-select: none;
+  }
+  .nav-item:hover { color: var(--text); background: var(--panel2); }
+  .nav-item.active {
+    color: var(--text); background: var(--accent-soft);
+    border-color: rgba(79, 143, 247, .25);
+  }
+  .nav-item.active .ico { color: var(--accent); }
+  .nav-item .ico { width: 17px; text-align: center; font-size: 14px; }
+  .nav-item .count {
+    margin-left: auto; font-size: 10.5px; background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px;
+    color: var(--dim); font-family: var(--mono);
+  }
+  .nav-item .count.hot { background: var(--red-soft); border-color: rgba(240,82,74,.3); color: var(--red); }
+  .engine-card {
+    margin-top: auto; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 12px; font-size: 11.5px;
+  }
+  .engine-card .row { display: flex; justify-content: space-between; gap: 8px;
+                      padding: 2.5px 0; color: var(--dim); }
+  .engine-card .row b { color: var(--text); font-weight: 600; font-family: var(--mono); }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+              display: inline-block; margin-right: 6px;
+              animation: pulse 2s infinite; box-shadow: 0 0 8px var(--green); }
+  .live-dot.warn { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+  @keyframes pulse { 50% { opacity: .4; } }
+
+  /* ---------------- main column ---------------- */
+  .main { display: flex; flex-direction: column; min-width: 0; }
+  .topbar {
+    display: flex; align-items: center; gap: 14px; padding: 12px 22px;
+    border-bottom: 1px solid var(--border-soft); background: rgba(10,14,24,.86);
+  }
+  .topbar h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  .topbar .sub { color: var(--faint); font-size: 11.5px; margin-top: 1px; }
+  .spacer { flex: 1; }
+  .tsearch {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 7px 12px; font-size: 12.5px; width: 260px;
+    outline: none;
+  }
+  .tsearch:focus { border-color: var(--accent); }
+  .btn {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 13px; font-size: 12px; cursor: pointer;
+    font-weight: 550; display: inline-flex; align-items: center; gap: 7px;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { filter: brightness(1.1); }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px; background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 99px; padding: 5px 12px;
+    font-size: 11.5px; color: var(--dim);
+  }
+  .chip b { color: var(--text); font-weight: 600; }
+
+  .content { flex: 1; overflow-y: auto; padding: 20px 22px; }
+  .view { display: none; }
+  .view.active { display: block; }
+  .content::-webkit-scrollbar, .side::-webkit-scrollbar, .scroll::-webkit-scrollbar { width: 9px; }
+  .content::-webkit-scrollbar-thumb, .side::-webkit-scrollbar-thumb, .scroll::-webkit-scrollbar-thumb {
+    background: #1c2438; border-radius: 5px; }
+
+  /* ---------------- KPI cards ---------------- */
+  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 16px; }
+  .kpi {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 13px 16px 12px; position: relative; overflow: hidden;
+  }
+  .kpi::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px;
+                 background: var(--accent); opacity: .8; }
+  .kpi.red::before { background: var(--red); }
+  .kpi.amber::before { background: var(--amber); }
+  .kpi.green::before { background: var(--green); }
+  .kpi.purple::before { background: var(--purple); }
+  .kpi .val { font-size: 24px; font-weight: 700; letter-spacing: -.02em;
+              font-variant-numeric: tabular-nums; }
+  .kpi .lbl { color: var(--dim); font-size: 10.5px; text-transform: uppercase;
+              letter-spacing: .1em; margin-top: 3px; font-weight: 600; }
+  .kpi .trend { position: absolute; top: 12px; right: 14px; font-size: 11px;
+                color: var(--green); font-family: var(--mono); }
+
+  /* ---------------- panels & grids ---------------- */
+  .grid { display: grid; gap: 14px; margin-bottom: 14px; }
+  .g-2-1 { grid-template-columns: 2fr 1fr; }
+  .g-1-2 { grid-template-columns: 1fr 2fr; }
+  .g-1-1 { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 1100px) { .g-2-1, .g-1-2, .g-1-1 { grid-template-columns: 1fr; }
+                                .kpis { grid-template-columns: repeat(3, 1fr); } }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    display: flex; flex-direction: column; min-width: 0;
+  }
+  .panel-head {
+    display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .panel-head h3 { margin: 0; font-size: 12px; font-weight: 650; color: var(--text);
+                   text-transform: uppercase; letter-spacing: .08em; }
+  .panel-head .hint { color: var(--faint); font-size: 11px; font-weight: 400;
+                      text-transform: none; letter-spacing: 0; }
+  .panel-body { padding: 14px 16px; }
+  .panel-body.flush { padding: 0; flex: 1; overflow: auto; }
+
+  /* ---------------- tables ---------------- */
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid var(--border-soft);
+           white-space: nowrap; }
+  th { color: var(--faint); position: sticky; top: 0; background: var(--panel);
+       font-weight: 650; font-size: 10.5px; text-transform: uppercase;
+       letter-spacing: .08em; z-index: 2; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover td { background: #131a2d; }
+  td.qname { font-family: var(--mono); font-size: 11.8px; max-width: 380px;
+             overflow: hidden; text-overflow: ellipsis; }
+  td.wrap { white-space: normal; max-width: 420px; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .muted { color: var(--dim); } .faint { color: var(--faint); }
+
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 6px;
+          font-size: 10.5px; font-weight: 700; letter-spacing: .05em; }
+  .pill.CONFIRMED { background: var(--red-soft); color: var(--red); }
+  .pill.HIGH { background: var(--amber-soft); color: var(--amber); }
+  .pill.MEDIUM { background: var(--accent-soft); color: var(--accent); }
+  .pill.LOW { background: var(--green-soft); color: var(--green); }
+  .tag { display: inline-block; margin: 1px 3px 1px 0; padding: 2px 7px;
+         border-radius: 5px; font-size: 10px; font-family: var(--mono); font-weight: 600; }
+  .tag.canary { background: var(--purple-soft); color: var(--purple); }
+  .tag.sink { background: var(--red-soft); color: var(--red); }
+  .tag.src { background: var(--accent-soft); color: var(--accent); }
+  .tag.mitre { background: #14203a; color: #7ea6f5; }
+  .flag { display: inline-block; padding: 1.5px 7px; border-radius: 5px;
+          font-size: 9.5px; font-weight: 800; letter-spacing: .07em; }
+  .flag.beacon { background: var(--purple-soft); color: var(--purple); }
+  .flag.mass { background: var(--amber-soft); color: var(--amber); }
+  .flag.resp { background: rgba(57,197,207,.13); color: var(--cyan); }
+  .flag.vel { background: var(--red-soft); color: var(--red); }
+  .proc { color: var(--cyan); font-size: 11.5px; }
+
+  .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+  .toolbar input, .toolbar select {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 8px 12px; font-size: 12.5px; outline: none;
+  }
+  .toolbar input { min-width: 300px; }
+  .toolbar input:focus { border-color: var(--accent); }
+
+  .bar { height: 5px; background: var(--panel2); border-radius: 3px; overflow: hidden;
+         margin-top: 5px; }
+  .bar i { display: block; height: 100%; background: var(--red); border-radius: 3px; }
+  .talker { padding: 7px 0; }
+  .talker .t { display: flex; justify-content: space-between; font-size: 12px; }
+  .talker .t b { font-family: var(--mono); font-weight: 600; }
+
+  /* alert detail split */
+  .split { display: grid; grid-template-columns: 1.35fr 1fr; gap: 14px; height: 100%; }
+  .detail-code {
+    background: #0a0f1b; border: 1px solid var(--border-soft); border-radius: 10px;
+    padding: 12px 14px; font-family: var(--mono); font-size: 11.8px;
+    color: #9ee493; white-space: pre-wrap; word-break: break-all; line-height: 1.55;
+  }
+  .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 12px;
+        font-size: 12.3px; margin-bottom: 14px; }
+  .kv dt { color: var(--faint); } .kv dd { margin: 0; font-family: var(--mono);
+        font-size: 11.8px; word-break: break-all; }
+
+  /* ticker */
+  .ticker {
+    display: flex; align-items: center; gap: 18px; padding: 8px 22px;
+    border-top: 1px solid var(--border-soft); background: var(--side);
+    font-size: 11.5px; color: var(--faint); font-family: var(--mono);
+  }
+  .ticker .t-item b { color: var(--dim); font-weight: 600; }
+  .chart-box { position: relative; height: 285px; }
+  .chart-box.donut { height: 285px; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="side">
+    <div class="logo">
+      <div class="logo-badge">🛡️</div>
+      <div><b>ExfilTrap</b><small>DNS Threat Console</small></div>
+    </div>
+
+    <div class="nav-label">Monitor</div>
+    <div class="nav-item active" data-view="overview"><span class="ico">⊞</span> Overview</div>
+    <div class="nav-item" data-view="queries"><span class="ico">⌁</span> Live Queries <span class="count">1,284</span></div>
+    <div class="nav-item" data-view="alerts"><span class="ico">⚠</span> Alerts <span class="count hot">4</span></div>
+    <div class="nav-item" data-view="sessions"><span class="ico">◍</span> Sessions</div>
+
+    <div class="nav-label">Respond</div>
+    <div class="nav-item" data-view="responses"><span class="ico">⛔</span> Responses <span class="count">3</span></div>
+    <div class="nav-item" data-view="canary"><span class="ico">🎯</span> Canary Traps</div>
+
+    <div class="nav-label">System</div>
+    <div class="nav-item" data-view="service"><span class="ico">⚙</span> Service &amp; Health</div>
+
+    <div class="engine-card">
+      <div class="row"><span><span class="live-dot"></span>Engine</span><b style="color:var(--green)">RUNNING</b></div>
+      <div class="row"><span>mode</span><b>live:wlo1+lo</b></div>
+      <div class="row"><span>uptime</span><b>4h 12m</b></div>
+      <div class="row"><span>heartbeat</span><b>0.4s</b></div>
+      <div class="row"><span>privileges</span><b style="color:var(--green)">CAP_NET_RAW</b></div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="view-title">Security Overview</h1>
+        <div class="sub" id="view-sub">Live DNS tunneling &amp; exfiltration surveillance · single-host sensor</div>
+      </div>
+      <div class="spacer"></div>
+      <input class="tsearch" placeholder="Search domain, IP, process…  ( / )">
+      <span class="chip"><span class="live-dot"></span> LIVE</span>
+      <span class="chip">window <b>last 2h</b></span>
+      <button class="btn">⏸ Pause</button>
+      <button class="btn primary">⤓ Export evidence</button>
+    </header>
+
+    <main class="content">
+
+      <!-- ================= OVERVIEW ================= -->
+      <section class="view active" id="view-overview">
+        <div class="kpis">
+          <div class="kpi"><div class="val" id="k1">128,402</div><div class="lbl">Queries</div><span class="trend">+12/s</span></div>
+          <div class="kpi amber"><div class="val">312</div><div class="lbl">Flagged</div></div>
+          <div class="kpi red"><div class="val">4</div><div class="lbl">Confirmed decodes</div></div>
+          <div class="kpi purple"><div class="val">3</div><div class="lbl">Active responses</div></div>
+          <div class="kpi red"><div class="val">17</div><div class="lbl">Sinkhole intercepts</div></div>
+          <div class="kpi green"><div class="val">99.76%</div><div class="lbl">Clean rate</div></div>
+        </div>
+
+        <div class="grid g-2-1">
+          <div class="panel">
+            <div class="panel-head"><h3>Traffic &amp; detections</h3><span class="hint">60s buckets · last 2 hours</span>
+              <div class="spacer"></div><span class="chip">flagged overlay</span></div>
+            <div class="panel-body"><div class="chart-box"><canvas id="flow"></canvas></div></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Risk distribution</h3></div>
+            <div class="panel-body"><div class="chart-box donut"><canvas id="risk"></canvas></div></div>
+          </div>
+        </div>
+
+        <div class="grid g-1-2">
+          <div class="panel">
+            <div class="panel-head"><h3>Tunnel hunt</h3><span class="hint">flagged queries per base domain</span></div>
+            <div class="panel-body">
+              <div class="talker"><div class="t"><b class="mono">tunnel.attacker.example</b><span class="muted">261 flagged</span></div><div class="bar"><i style="width:96%"></i></div></div>
+              <div class="talker"><div class="t"><b class="mono">drip.exfil-node.net</b><span class="muted">34</span></div><div class="bar"><i style="width:38%"></i></div></div>
+              <div class="talker"><div class="t"><b class="mono">c2beacon.dyndns.org</b><span class="muted">12</span></div><div class="bar"><i style="width:18%"></i></div></div>
+              <div class="talker"><div class="t"><b class="mono">random-fonts.gopts1.com</b><span class="muted">3</span></div><div class="bar"><i style="width:8%"></i></div></div>
+              <div class="talker"><div class="t"><b class="muted">everything else</b><span class="faint">2</span></div><div class="bar"><i style="width:4%; background:var(--faint)"></i></div></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Latest alerts</h3><span class="hint">click a row for full evidence</span></div>
+            <div class="panel-body flush scroll" style="max-height:300px">
+              <table>
+                <thead><tr><th>time</th><th>query</th><th>verdict</th><th>signals</th></tr></thead>
+                <tbody>
+                  <tr><td class="muted">14:22:31</td><td class="qname" style="color:var(--purple)">a1b2c3.canary.exfiltrap.sensor</td><td><span class="pill CONFIRMED">CONFIRMED</span> <span class="tag canary">CANARY</span></td><td><span class="proc">🔗 curl (pid 23141)</span></td></tr>
+                  <tr><td class="muted">14:21:58</td><td class="qname">KNKE6TCF…S2WSJKA.tunnel.attacker.example</td><td><span class="pill CONFIRMED">CONFIRMED</span></td><td><span class="proc">🐍 python3 (pid 8812)</span> <span class="tag mitre">T1048.003</span></td></tr>
+                  <tr><td class="muted">14:18:04</td><td class="qname">m7dxq2p.drip.exfil-node.net</td><td><span class="pill HIGH">HIGH</span></td><td><span class="flag vel">VELOCITY</span> <span class="tag sink">SUNK</span> <span class="tag mitre">T1568.002</span></td></tr>
+                  <tr><td class="muted">14:02:47</td><td class="qname">keepalive3.ezviz7.com</td><td><span class="pill HIGH">HIGH</span></td><td><span class="flag beacon">BEACON</span> <span class="tag mitre">T1071.004</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= LIVE QUERIES ================= -->
+      <section class="view" id="view-queries">
+        <div class="toolbar">
+          <input placeholder="Filter domain, source, resolver, process…">
+          <select><option>all levels</option><option>CONFIRMED</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option></select>
+          <select><option>all processes</option><option>python3 (pid 8812)</option><option>curl (pid 23141)</option><option>systemd-resolved</option></select>
+          <span class="muted">showing 1,284 of 128,402</span>
+        </div>
+        <div class="panel" style="height: calc(100dvh - 260px)">
+          <div class="panel-body flush scroll">
+            <table>
+              <thead><tr><th>time</th><th>query</th><th>verdict</th><th>P(mal)</th><th>process</th><th>resolver</th><th>source</th></tr></thead>
+              <tbody>
+                <tr><td class="muted">14:23:02</td><td class="qname">x7f2a.tunnel.attacker.example</td><td><span class="pill HIGH">HIGH</span></td><td class="num">0.912</td><td><span class="proc">🐍 python3 (pid 8812)</span></td><td class="mono faint">127.0.0.53</td><td class="mono faint">10.0.0.5</td></tr>
+                <tr><td class="muted">14:23:01</td><td class="qname">www.google.com</td><td><span class="pill LOW">LOW</span></td><td class="num">0.003</td><td><span class="proc">🌐 chrome (pid 4410)</span></td><td class="mono faint">127.0.0.53</td><td class="mono faint">10.0.0.5</td></tr>
+                <tr><td class="muted">14:22:58</td><td class="qname">telemetry.events.data.microsoft.com</td><td><span class="pill LOW">LOW</span></td><td class="num">0.018</td><td><span class="proc">⚙ svchost (pid 2210)</span></td><td class="mono faint">127.0.0.53</td><td class="mono faint">10.0.0.5</td></tr>
+                <tr><td class="muted">14:22:31</td><td class="qname" style="color:var(--purple)">a1b2c3.canary.exfiltrap.sensor</td><td><span class="pill CONFIRMED">CONFIRMED</span></td><td class="num">0.640</td><td><span class="proc">🔗 curl (pid 23141)</span></td><td class="mono faint">127.0.0.53</td><td class="mono faint">10.0.0.5</td></tr>
+                <tr><td class="muted">14:22:07</td><td class="qname">p4tq9.drip.exfil-node.net</td><td><span class="pill HIGH">HIGH</span></td><td class="num">0.887</td><td><span class="proc">🐍 python3 (pid 8812)</span></td><td class="mono" style="color:var(--amber)">8.8.8.8 ⚠ bypass</td><td class="mono faint">10.0.0.5</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= ALERTS (master-detail) ================= -->
+      <section class="view" id="view-alerts">
+        <div class="split">
+          <div class="panel">
+            <div class="panel-head"><h3>Alert queue</h3><span class="hint">4 open</span></div>
+            <div class="panel-body flush scroll">
+              <table>
+                <thead><tr><th>time</th><th>query</th><th>verdict</th></tr></thead>
+                <tbody>
+                  <tr style="background:#131a2d"><td class="muted">14:22:31</td><td class="qname" style="color:var(--purple)">a1b2c3.canary.exfiltrap.sensor</td><td><span class="pill CONFIRMED">CONFIRMED</span></td></tr>
+                  <tr><td class="muted">14:21:58</td><td class="qname">KNKE6TCF…S2WSJKA.tunnel.attacker…</td><td><span class="pill CONFIRMED">CONFIRMED</span></td></tr>
+                  <tr><td class="muted">14:18:04</td><td class="qname">m7dxq2p.drip.exfil-node.net</td><td><span class="pill HIGH">HIGH</span></td></tr>
+                  <tr><td class="muted">14:02:47</td><td class="qname">keepalive3.ezviz7.com</td><td><span class="pill HIGH">HIGH</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Evidence</h3><div class="spacer"></div><button class="btn">⤓ Export this incident</button></div>
+            <div class="panel-body">
+              <dl class="kv">
+                <dt>verdict</dt><dd><span class="pill CONFIRMED">CONFIRMED</span> · canary trap</dd>
+                <dt>time</dt><dd>2026-09-26 14:22:31.114</dd>
+                <dt>query</dt><dd style="color:var(--purple)">a1b2c3.canary.exfiltrap.sensor</dd>
+                <dt>process</dt><dd class="proc">curl (pid 23141) — /usr/bin/curl</dd>
+                <dt>resolver</dt><dd>127.0.0.53 (system stub)</dd>
+                <dt>source</dt><dd>10.0.0.5 (this host)</dd>
+                <dt>ATT&amp;CK</dt><dd><span class="tag mitre">T1071.004</span></dd>
+              </dl>
+              <div style="font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin-bottom:6px">Decoded payload</div>
+              <div class="detail-code">$ dig a1b2c3.canary.exfiltrap.sensor
+;; → CANARY TRIP: nothing legitimate resolves this name.
+;;   Confidence: 100% (canary domains are never false positives)
+;;   Action: CONFIRMED alert raised, baseline frozen 300s
+;;   Session: 1 query · first contact from curl (pid 23141)</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= RESPONSES ================= -->
+      <section class="view" id="view-responses">
+        <div class="kpis" style="grid-template-columns:repeat(4,1fr)">
+          <div class="kpi purple"><div class="val">3</div><div class="lbl">Active domain sinks</div></div>
+          <div class="kpi red"><div class="val">17</div><div class="lbl">Intercepted attempts</div></div>
+          <div class="kpi amber"><div class="val">1</div><div class="lbl">Deferred (self-host guard)</div></div>
+          <div class="kpi green"><div class="val">0</div><div class="lbl">Source firewall drops</div></div>
+        </div>
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-head"><h3>Response ledger</h3><span class="hint">every automated action, with provenance</span>
+            <div class="spacer"></div><button class="btn" style="color:var(--red)">✕ Clear all sinks</button></div>
+          <div class="panel-body flush scroll" style="max-height:44dvh">
+            <table>
+              <thead><tr><th>time</th><th>action</th><th>target</th><th>triggered by</th><th>evidence</th><th></th></tr></thead>
+              <tbody>
+                <tr><td class="muted">14:18:04</td><td><span class="tag sink">DOMAIN SINK</span></td><td class="qname">tunnel.attacker.example + label</td><td><span class="proc">🐍 python3 (pid 8812)</span> <span class="faint">via 127.0.0.53</span></td><td class="wrap muted">CONFIRMED decode (base32) · 17 attempts intercepted since</td><td><button class="btn" style="padding:3px 10px;font-size:11px">unblock</button></td></tr>
+                <tr><td class="muted">14:18:04</td><td><span class="tag sink">DOMAIN SINK</span></td><td class="qname">drip.exfil-node.net + labels</td><td><span class="proc">🐍 python3 (pid 8812)</span></td><td class="wrap muted">HIGH ×3 strikes on base domain (velocity)</td><td><button class="btn" style="padding:3px 10px;font-size:11px">unblock</button></td></tr>
+                <tr><td class="muted">14:02:47</td><td><span class="tag canary">CANARY ALERT</span></td><td class="qname">a1b2c3.canary.exfiltrap.sensor</td><td><span class="proc">🔗 curl (pid 23141)</span></td><td class="wrap muted">trap domain resolved — no sink needed</td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="grid g-1-1">
+          <div class="panel">
+            <div class="panel-head"><h3>Allowlist</h3><span class="hint">never touched · survives restarts</span></div>
+            <div class="panel-body">
+              <div style="display:flex;gap:8px;margin-bottom:10px">
+                <input class="tsearch" style="flex:1;width:auto" placeholder="IP e.g. 10.0.0.9">
+                <button class="btn">+ Allow</button>
+              </div>
+              <div class="mono" style="font-size:12px;line-height:2">10.0.0.9 <span class="faint">nas.local — operator</span> ✕<br>192.168.1.1 <span class="faint">gateway — operator</span> ✕</div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Muted domains</h3><span class="hint">stored but capped at LOW</span></div>
+            <div class="panel-body">
+              <div style="display:flex;gap:8px;margin-bottom:10px">
+                <input class="tsearch" style="flex:1;width:auto" placeholder="domain e.g. log.my-telemetry.com">
+                <button class="btn">+ Mute</button>
+              </div>
+              <div class="mono" style="font-size:12px;line-height:2">log.aliyuncs.com <span class="faint">own-host telemetry</span> ✕</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= CANARY ================= -->
+      <section class="view" id="view-canary">
+        <div class="grid g-1-1">
+          <div class="panel">
+            <div class="panel-head"><h3>Active traps</h3><span class="hint">any query = hard evidence</span></div>
+            <div class="panel-body">
+              <div class="mono" style="font-size:12px;line-height:2.1">
+                7f3a9c1b2e.canary.exfiltrap.sensor <button class="btn" style="padding:2px 9px;font-size:10.5px">copy dig</button><br>
+                d4e5f60718.canary.exfiltrap.sensor <button class="btn" style="padding:2px 9px;font-size:10.5px">copy dig</button><br>
+                9a8b7c6d5f.canary.exfiltrap.sensor <button class="btn" style="padding:2px 9px;font-size:10.5px">copy dig</button><br>
+                <span class="faint">… 5 more generated this run</span>
+              </div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Trap hits</h3><span class="hint">never a false positive</span></div>
+            <div class="panel-body">
+              <div class="detail-code" style="color:var(--purple)">14:22:31  a1b2c3.canary.exfiltrap.sensor
+          by curl (pid 23141) · via 127.0.0.53
+          → CONFIRMED alert · session frozen · ATT&amp;CK T1071.004</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= SERVICE ================= -->
+      <section class="view" id="view-service">
+        <div class="grid g-1-1">
+          <div class="panel">
+            <div class="panel-head"><h3>Capture health</h3></div>
+            <div class="panel-body">
+              <dl class="kv">
+                <dt>wlo1</dt><dd style="color:var(--green)">alive · 0.4s heartbeat</dd>
+                <dt>lo</dt><dd style="color:var(--green)">alive · 0.4s heartbeat</dd>
+                <dt>mode</dt><dd>live:wlo1+lo</dd>
+                <dt>processed</dt><dd>128,402 queries this session</dd>
+                <dt>watchdog</dt><dd>systemd sd_notify · pinging</dd>
+              </dl>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Response policy</h3></div>
+            <div class="panel-body">
+              <dl class="kv">
+                <dt>sinkhole</dt><dd style="color:var(--green)">armed · strikes=3 · TTL 3600s</dd>
+                <dt>popularity guard</dt><dd>Tranco 50k + built-ins · active</dd>
+                <dt>self-host guard</dt><dd style="color:var(--green)">active · sources 10.0.0.5, 127/8 never firewalled</dd>
+                <dt>canary traps</dt><dd>8 generated + 0 operator</dd>
+                <dt>resolver watch</dt><dd>system stub 127.0.0.53 · bypass detection on</dd>
+              </dl>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <footer class="ticker">
+      <span class="t-item"><span class="live-dot"></span><b>14:23:04</b></span>
+      <span class="t-item">capture <b>wlo1+lo</b> healthy</span>
+      <span class="t-item">last alert <b style="color:var(--red)">14:22:31 CANARY</b></span>
+      <span class="t-item">sinkhole <b>3 domains · 17 intercepts</b></span>
+      <span class="spacer"></span>
+      <span class="t-item">ExfilTrap v2.0 · stateful DNS exfiltration defense</span>
+    </footer>
+  </div>
+</div>
+
+<script>
+  // view switching
+  const titles = {
+    overview: ["Security Overview", "Live DNS tunneling & exfiltration surveillance · single-host sensor"],
+    queries:  ["Live Queries", "Every DNS query with full attribution: process, resolver, source"],
+    alerts:   ["Alerts", "Verdicts with decoded payloads, ATT&CK mapping and evidence"],
+    sessions: ["Sessions", "Stateful per-source tracking: mass z-test, beacon CV, velocity"],
+    responses:["Responses", "The automated-response ledger: domain sinks, drops, intercepts"],
+    canary:   ["Canary Traps", "Tripwire domains — any resolution is hard evidence"],
+    service:  ["Service & Health", "Capture, privileges, watchdog and policy state"],
+  };
+  document.querySelectorAll(".nav-item").forEach((el) => {
+    el.onclick = () => {
+      document.querySelectorAll(".nav-item").forEach((x) => x.classList.remove("active"));
+      document.querySelectorAll(".view").forEach((x) => x.classList.remove("active"));
+      el.classList.add("active");
+      const v = el.dataset.view;
+      document.getElementById("view-" + v).classList.add("active");
+      document.getElementById("view-title").textContent = titles[v][0];
+      document.getElementById("view-sub").textContent = titles[v][1];
+    };
+  });
+
+  // demo charts
+  const labels = Array.from({length: 120}, (_, i) => i);
+  const flowData = labels.map((i) => 30 + 25 * Math.sin(i / 9) + Math.random() * 22);
+  const flagged  = flowData.map((v, i) => (i > 62 && i < 78) || (i > 100) ? v * (0.28 + Math.random() * .3) : v * 0.02);
+  new Chart(document.getElementById("flow"), {
+    type: "line",
+    data: { labels, datasets: [
+      { label: "queries", data: flowData, borderColor: "#4f8ff7", borderWidth: 1.6,
+        pointRadius: 0, tension: .35, fill: true,
+        backgroundColor: (c) => { const g = c.chart.ctx.createLinearGradient(0, 0, 0, 220);
+          g.addColorStop(0, "rgba(79,143,247,.28)"); g.addColorStop(1, "rgba(79,143,247,0)");
+          return g; } },
+      { label: "flagged", data: flagged, borderColor: "#f0524a", borderWidth: 1.6,
+        pointRadius: 0, tension: .35, fill: true,
+        backgroundColor: "rgba(240,82,74,.12)" } ] },
+    options: { animation: false, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { labels: { color: "#7d8aa3", boxWidth: 10, boxHeight: 10,
+        font: { size: 10.5 } } } },
+      scales: { x: { ticks: { color: "#55617a", maxTicksLimit: 10, font: { size: 10 } },
+                     grid: { color: "#161d2e" } },
+                y: { ticks: { color: "#55617a", font: { size: 10 } },
+                     grid: { color: "#161d2e" }, beginAtZero: true } } }
+  });
+  new Chart(document.getElementById("risk"), {
+    type: "doughnut",
+    data: { labels: ["LOW", "MEDIUM", "HIGH", "CONFIRMED"],
+      datasets: [{ data: [128090, 68, 210, 4],
+        backgroundColor: ["#40c46a", "#4f8ff7", "#e2a336", "#f0524a"],
+        borderColor: "#101627", borderWidth: 3 }] },
+    options: { cutout: "68%", maintainAspectRatio: false, plugins: { legend: { position: "bottom",
+      labels: { color: "#7d8aa3", boxWidth: 10, font: { size: 10.5 } } } } }
+  });
+</script>
+</body>
+</html>

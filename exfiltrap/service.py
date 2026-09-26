@@ -650,6 +650,9 @@ def main(argv: list[str] | None = None) -> int:
                                 if s.interval_cv is not None else None),
                 "slow_drip": s.slow_drip_candidate,
                 "beacon": s.beacon_candidate,
+                "velocity": s.velocity_candidate,
+                "domain_beacon": s.domain_beacon,
+                "resp_answer_bytes": s.resp_answer_bytes,
                 "last_seen": round(s.last_timestamp, 1),
             }
             for s in snap.values()
@@ -705,6 +708,14 @@ def main(argv: list[str] | None = None) -> int:
     def _live_status() -> dict:
         body = runtime.status()
         body["canaries"] = canary_domains
+        body["policy"] = {
+            "sinkhole": sinkhole is not None,
+            "sinkhole_strikes": sinkhole.strikes if sinkhole else None,
+            "sinkhole_ttl": args.block_ttl or 3600.0,
+            "popularity_guard": sinkhole is not None,
+            "own_ips": sorted(own_ips),
+            "self_dos_guard": True,
+        }
         if sinkhole is not None:
             body["sinkhole_domains"] = sinkhole.blocked_domains()
         return body

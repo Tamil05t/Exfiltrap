@@ -1,527 +1,972 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>ExFilTrap — DNS Exfiltration Monitor</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #0b0f14; --panel: #121821; --panel2: #0e141c;
-      --border: #212b38; --text: #c9d1d9; --dim: #8b98a5;
-      --blue: #58a6ff; --red: #f85149; --amber: #d29922; --green: #3fb950;
-    }
-    * { box-sizing: border-box; }
-    body { font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
-           background: var(--bg); color: var(--text); margin: 0; }
-    .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+<meta charset="utf-8">
+<title>ExfilTrap — DNS Exfiltration Defense Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0a0e18; --side: #0c1120; --panel: #101627; --panel2: #0d1322;
+    --border: #1c2438; --border-soft: #161d2e;
+    --text: #dbe2ee; --dim: #7d8aa3; --faint: #55617a;
+    --accent: #4f8ff7; --accent-soft: rgba(79,143,247,.13);
+    --red: #f0524a; --red-soft: rgba(240,82,74,.13);
+    --amber: #e2a336; --amber-soft: rgba(226,163,54,.13);
+    --green: #40c46a; --green-soft: rgba(64,196,106,.13);
+    --purple: #a78bfa; --purple-soft: rgba(167,139,250,.14);
+    --cyan: #39c5cf;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: "Inter", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; font-family: var(--sans); font-size: 13px;
+         background: var(--bg); color: var(--text); overflow: hidden; }
+  .mono { font-family: var(--mono); }
+  .app { display: grid; grid-template-columns: 228px 1fr; height: 100dvh; }
 
-    header { display: flex; align-items: center; gap: 1rem; padding: .8rem 1.4rem;
-             border-bottom: 1px solid var(--border); background: var(--panel2);
-             position: sticky; top: 0; z-index: 10; }
-    header h1 { font-size: 1.05rem; margin: 0; color: var(--blue);
-                letter-spacing: .04em; }
-    .chip { background: var(--panel); border: 1px solid var(--border);
-            border-radius: 99px; padding: .15rem .7rem; font-size: .72rem;
-            color: var(--dim); }
-    .chip b { color: var(--text); font-weight: 600; }
-    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green);
-           display: inline-block; margin-right: .35rem; animation: pulse 2s infinite; }
-    .dot.stale { background: var(--red); animation: none; }
-    @keyframes pulse { 50% { opacity: .35; } }
-    header .spacer { flex: 1; }
-    header button { background: var(--panel); color: var(--text);
-            border: 1px solid var(--border); border-radius: 6px;
-            padding: .35rem .8rem; font-size: .78rem; cursor: pointer; }
-    header button:hover { border-color: var(--blue); }
+  /* ---------------- sidebar ---------------- */
+  .side { background: var(--side); border-right: 1px solid var(--border-soft);
+          display: flex; flex-direction: column; padding: 14px 12px; gap: 4px;
+          overflow-y: auto; }
+  .logo { display: flex; align-items: center; gap: 10px; padding: 4px 8px 14px; }
+  .logo-badge { width: 34px; height: 34px; border-radius: 9px; flex: none;
+    background: linear-gradient(135deg, #2563eb, #4f8ff7); display: grid;
+    place-items: center; font-size: 16px; box-shadow: 0 4px 18px rgba(37,99,235,.35); }
+  .logo b { font-size: 14.5px; letter-spacing: .02em; }
+  .logo small { display: block; color: var(--faint); font-size: 10px;
+                letter-spacing: .14em; text-transform: uppercase; }
+  .nav-label { color: var(--faint); font-size: 10px; font-weight: 700;
+               letter-spacing: .14em; text-transform: uppercase; padding: 14px 10px 6px; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 7px 10px;
+              border-radius: 8px; color: var(--dim); cursor: pointer; font-weight: 500;
+              border: 1px solid transparent; user-select: none; }
+  .nav-item:hover { color: var(--text); background: var(--panel2); }
+  .nav-item.active { color: var(--text); background: var(--accent-soft);
+                     border-color: rgba(79,143,247,.25); }
+  .nav-item.active .ico { color: var(--accent); }
+  .nav-item .ico { width: 17px; text-align: center; font-size: 14px; }
+  .nav-item .count { margin-left: auto; font-size: 10.5px; background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px;
+    color: var(--dim); font-family: var(--mono); }
+  .nav-item .count.hot { background: var(--red-soft); border-color: rgba(240,82,74,.3); color: var(--red); }
+  .engine-card { margin-top: auto; background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 11.5px; }
+  .engine-card .row { display: flex; justify-content: space-between; gap: 8px;
+                      padding: 2.5px 0; color: var(--dim); }
+  .engine-card .row b { color: var(--text); font-weight: 600; font-family: var(--mono); }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+              display: inline-block; margin-right: 6px; animation: pulse 2s infinite;
+              box-shadow: 0 0 8px var(--green); }
+  .live-dot.warn { background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: none; }
+  .live-dot.down { background: var(--red); box-shadow: 0 0 8px var(--red); animation: none; }
+  @keyframes pulse { 50% { opacity: .4; } }
 
-    nav { display: flex; gap: .2rem; padding: 0 1.4rem; background: var(--panel2);
-          border-bottom: 1px solid var(--border); position: sticky; top: 49px; }
-    nav button { background: none; border: none; color: var(--dim); padding: .7rem 1rem;
-                 font-size: .84rem; cursor: pointer; border-bottom: 2px solid transparent; }
-    nav button.active { color: var(--text); border-bottom-color: var(--blue); }
-    nav button:hover { color: var(--text); }
+  /* ---------------- main ---------------- */
+  .main { display: flex; flex-direction: column; min-width: 0; }
+  .topbar { display: flex; align-items: center; gap: 14px; padding: 12px 22px;
+            border-bottom: 1px solid var(--border-soft); background: rgba(10,14,24,.86); }
+  .topbar h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  .topbar .sub { color: var(--faint); font-size: 11.5px; margin-top: 1px; }
+  .spacer { flex: 1; }
+  .tsearch { background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 7px 12px; font-size: 12.5px; width: 240px; outline: none; }
+  .tsearch:focus { border-color: var(--accent); }
+  .btn { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 13px; font-size: 12px; cursor: pointer;
+    font-weight: 550; display: inline-flex; align-items: center; gap: 7px; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { filter: brightness(1.1); }
+  .btn.danger { color: var(--red); }
+  .btn.danger:hover { border-color: var(--red); }
+  .btn.mini { padding: 2px 9px; font-size: 10.5px; }
+  .chip { display: inline-flex; align-items: center; gap: 7px; background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 99px; padding: 5px 12px;
+    font-size: 11.5px; color: var(--dim); }
+  .chip b { color: var(--text); font-weight: 600; }
 
-    main { padding: 1.2rem 1.4rem; max-width: 1400px; margin: 0 auto; }
-    section.tab { display: none; }
-    section.tab.active { display: block; }
+  .content { flex: 1; overflow-y: auto; padding: 20px 22px; }
+  .view { display: none; }
+  .view.active { display: block; }
+  .content::-webkit-scrollbar, .side::-webkit-scrollbar, .scroll::-webkit-scrollbar { width: 9px; }
+  .content::-webkit-scrollbar-thumb, .side::-webkit-scrollbar-thumb,
+  .scroll::-webkit-scrollbar-thumb { background: #1c2438; border-radius: 5px; }
 
-    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-             gap: .8rem; margin-bottom: 1.1rem; }
-    .card { background: var(--panel); border: 1px solid var(--border);
-            border-radius: 10px; padding: .9rem 1.1rem; }
-    .card .num { font-size: 1.65rem; font-weight: 700; color: var(--blue); }
-    .card .lbl { color: var(--dim); font-size: .68rem; text-transform: uppercase;
-                 letter-spacing: .09em; margin-top: .15rem; }
-    .card.alert .num { color: var(--red); }
-    .card.good .num { color: var(--green); }
+  /* KPIs */
+  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 16px; }
+  .kpis.four { grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 1100px) { .kpis { grid-template-columns: repeat(3, 1fr); }
+                               .kpis.four { grid-template-columns: repeat(2, 1fr); } }
+  .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+         padding: 13px 16px 12px; position: relative; overflow: hidden; }
+  .kpi::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px;
+                 background: var(--accent); opacity: .8; }
+  .kpi.red::before { background: var(--red); }
+  .kpi.amber::before { background: var(--amber); }
+  .kpi.green::before { background: var(--green); }
+  .kpi.purple::before { background: var(--purple); }
+  .kpi .val { font-size: 24px; font-weight: 700; letter-spacing: -.02em;
+              font-variant-numeric: tabular-nums; }
+  .kpi .lbl { color: var(--dim); font-size: 10.5px; text-transform: uppercase;
+              letter-spacing: .1em; margin-top: 3px; font-weight: 600; }
+  .kpi .trend { position: absolute; top: 12px; right: 14px; font-size: 11px;
+                color: var(--green); font-family: var(--mono); }
 
-    .grid2 { display: grid; grid-template-columns: 2fr 1fr; gap: .9rem; }
-    @media (max-width: 950px) { .grid2 { grid-template-columns: 1fr; } }
-    .panel { background: var(--panel); border: 1px solid var(--border);
-             border-radius: 10px; padding: .9rem 1rem; margin-bottom: .9rem; }
-    .panel h3 { margin: 0 0 .6rem; font-size: .78rem; color: var(--dim);
-                text-transform: uppercase; letter-spacing: .09em; }
+  /* panels */
+  .grid { display: grid; gap: 14px; margin-bottom: 14px; }
+  .g-2-1 { grid-template-columns: 2fr 1fr; }
+  .g-1-2 { grid-template-columns: 1fr 2fr; }
+  .g-1-1 { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 1100px) { .g-2-1, .g-1-2, .g-1-1 { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border);
+           border-radius: 12px; display: flex; flex-direction: column; min-width: 0; }
+  .panel-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+                border-bottom: 1px solid var(--border-soft); }
+  .panel-head h3 { margin: 0; font-size: 12px; font-weight: 650; color: var(--text);
+                   text-transform: uppercase; letter-spacing: .08em; }
+  .panel-head .hint { color: var(--faint); font-size: 11px; font-weight: 400;
+                      text-transform: none; letter-spacing: 0; }
+  .panel-body { padding: 14px 16px; }
+  .panel-body.flush { padding: 0; flex: 1; overflow: auto; }
 
-    table { border-collapse: collapse; width: 100%; font-size: .78rem; }
-    th, td { text-align: left; padding: .4rem .55rem; border-bottom:
-             1px solid var(--border); white-space: nowrap; }
-    th { color: var(--dim); position: sticky; top: 0; background: var(--panel);
-         font-weight: 600; font-size: .7rem; text-transform: uppercase;
-         letter-spacing: .06em; }
-    tbody tr:hover td { background: #161e29; }
-    td.qname { font-family: ui-monospace, Menlo, Consolas, monospace;
-               max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
-    td.wrap { white-space: normal; max-width: 360px; }
-    .scroll { max-height: 430px; overflow: auto; border-radius: 8px; }
+  /* tables */
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid var(--border-soft);
+           white-space: nowrap; }
+  th { color: var(--faint); position: sticky; top: 0; background: var(--panel);
+       font-weight: 650; font-size: 10.5px; text-transform: uppercase;
+       letter-spacing: .08em; z-index: 2; }
+  tbody tr.sel td, tbody tr:hover td { background: #131a2d; }
+  td.qname { font-family: var(--mono); font-size: 11.8px; max-width: 380px;
+             overflow: hidden; text-overflow: ellipsis; }
+  td.wrap { white-space: normal; max-width: 420px; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .muted { color: var(--dim); } .faint { color: var(--faint); }
 
-    .risk { display: inline-block; padding: .08rem .5rem; border-radius: 5px;
-            font-size: .68rem; font-weight: 700; letter-spacing: .03em; }
-    .risk-CONFIRMED { background: #3d1418; color: var(--red); }
-    .risk-HIGH { background: #3a2c10; color: var(--amber); }
-    .risk-MEDIUM { background: #12233c; color: var(--blue); }
-    .risk-LOW { background: #11301c; color: var(--green); }
-    .flag { display: inline-block; margin-left: .3rem; padding: .05rem .4rem;
-            border-radius: 4px; font-size: .64rem; }
-    .flag.drip { background: #3a2c10; color: var(--amber); }
-    .flag.beacon { background: #2a1a3d; color: #b392f0; }
-    .flag.resp { background: #0e2f3a; color: #39c5cf; }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 6px;
+          font-size: 10.5px; font-weight: 700; letter-spacing: .05em; }
+  .pill.CONFIRMED { background: var(--red-soft); color: var(--red); }
+  .pill.HIGH { background: var(--amber-soft); color: var(--amber); }
+  .pill.MEDIUM { background: var(--accent-soft); color: var(--accent); }
+  .pill.LOW { background: var(--green-soft); color: var(--green); }
+  .tag { display: inline-block; margin: 1px 3px 1px 0; padding: 2px 7px; border-radius: 5px;
+         font-size: 10px; font-family: var(--mono); font-weight: 600; }
+  .tag.canary { background: var(--purple-soft); color: var(--purple); }
+  .tag.sink { background: var(--red-soft); color: var(--red); }
+  .tag.src { background: var(--accent-soft); color: var(--accent); }
+  .tag.mitre { background: #14203a; color: #7ea6f5; }
+  .tag.bypass { background: var(--amber-soft); color: var(--amber); }
+  .flag { display: inline-block; padding: 1.5px 7px; border-radius: 5px; font-size: 9.5px;
+          font-weight: 800; letter-spacing: .07em; }
+  .flag.beacon { background: var(--purple-soft); color: var(--purple); }
+  .flag.mass { background: var(--amber-soft); color: var(--amber); }
+  .flag.resp { background: rgba(57,197,207,.13); color: var(--cyan); }
+  .flag.vel { background: var(--red-soft); color: var(--red); }
+  .proc { color: var(--cyan); font-size: 11.5px; }
+  .proc.none { color: var(--faint); }
 
-    .toolbar { display: flex; gap: .6rem; margin-bottom: .7rem; flex-wrap: wrap; }
-    .toolbar input, .toolbar select { background: var(--panel2);
-            border: 1px solid var(--border); color: var(--text); border-radius: 6px;
-            padding: .38rem .6rem; font-size: .78rem; }
-    .toolbar input { min-width: 240px; }
-    .decoded { font-family: ui-monospace, Menlo, Consolas, monospace;
-               color: var(--green); font-size: .72rem; }
-    footer { color: var(--dim); font-size: .72rem; padding: 1rem 1.4rem 2rem;
-             border-top: 1px solid var(--border); margin-top: 1rem; }
-    .muted { color: var(--dim); }
-    .bar { height: 6px; background: var(--panel2); border-radius: 3px;
-           overflow: hidden; margin-top: .3rem; }
-    .bar i { display: block; height: 100%; background: var(--red); }
-  </style>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+  .toolbar input, .toolbar select { background: var(--panel2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: 8px 12px; font-size: 12.5px; outline: none; }
+  .toolbar input { min-width: 300px; }
+  .toolbar input:focus { border-color: var(--accent); }
+
+  .bar { height: 5px; background: var(--panel2); border-radius: 3px; overflow: hidden; margin-top: 5px; }
+  .bar i { display: block; height: 100%; background: var(--red); border-radius: 3px; }
+  .talker { padding: 7px 0; }
+  .talker .t { display: flex; justify-content: space-between; font-size: 12px; gap: 10px; }
+  .talker .t b { font-family: var(--mono); font-weight: 600; overflow: hidden;
+                 text-overflow: ellipsis; white-space: nowrap; }
+
+  .split { display: grid; grid-template-columns: 1.35fr 1fr; gap: 14px; height: calc(100dvh - 240px); }
+  @media (max-width: 1100px) { .split { grid-template-columns: 1fr; height: auto; } }
+  .detail-code { background: #0a0f1b; border: 1px solid var(--border-soft); border-radius: 10px;
+    padding: 12px 14px; font-family: var(--mono); font-size: 11.8px; color: #9ee493;
+    white-space: pre-wrap; word-break: break-all; line-height: 1.55; }
+  .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 12px; font-size: 12.3px;
+        margin-bottom: 14px; }
+  .kv dt { color: var(--faint); }
+  .kv dd { margin: 0; font-family: var(--mono); font-size: 11.8px; word-break: break-all; }
+
+  .ticker { display: flex; align-items: center; gap: 18px; padding: 8px 22px;
+    border-top: 1px solid var(--border-soft); background: var(--side); font-size: 11.5px;
+    color: var(--faint); font-family: var(--mono); }
+  .ticker .t-item b { color: var(--dim); font-weight: 600; }
+  .ticker .t-item b.alert { color: var(--red); }
+  .flash { animation: rowflash 1.2s ease-out; }
+  @keyframes rowflash { 0% { background: var(--accent-soft); } 100% { background: transparent; } }
+  .empty { padding: 26px 18px; color: var(--faint); text-align: center; font-size: 12.5px; }
+  .chart-box { position: relative; height: 285px; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 </head>
 <body>
-  <header>
-    <h1>ExFilTrap</h1>
-    <span class="chip"><span class="dot" id="live-dot"></span>mode <b id="svc-mode">–</b></span>
-    <span class="chip">uptime <b id="svc-uptime">–</b></span>
-    <span class="chip">heartbeat <b id="svc-hb">–</b></span>
-    <span class="spacer"></span>
-    <button id="refresh-btn" title="pause/resume 5s auto-refresh">⏸ pause</button>
-  </header>
+<div class="app">
 
-  <nav>
-    <button data-tab="overview" class="active">Overview</button>
-    <button data-tab="queries">Live Queries</button>
-    <button data-tab="alerts">Alerts</button>
-    <button data-tab="sessions">Sessions</button>
-    <button data-tab="blocked">Blocked</button>
-  </nav>
+  <aside class="side">
+    <div class="logo">
+      <div class="logo-badge">🛡️</div>
+      <div><b>ExfilTrap</b><small>DNS Threat Console</small></div>
+    </div>
+    <div class="nav-label">Monitor</div>
+    <div class="nav-item active" data-view="overview"><span class="ico">⊞</span> Overview</div>
+    <div class="nav-item" data-view="queries"><span class="ico">⌁</span> Live Queries <span class="count" id="nav-queries">–</span></div>
+    <div class="nav-item" data-view="alerts"><span class="ico">⚠</span> Alerts <span class="count hot" id="nav-alerts">–</span></div>
+    <div class="nav-item" data-view="sessions"><span class="ico">◍</span> Sessions</div>
+    <div class="nav-label">Respond</div>
+    <div class="nav-item" data-view="responses"><span class="ico">⛔</span> Responses <span class="count" id="nav-responses">–</span></div>
+    <div class="nav-item" data-view="canary"><span class="ico">🎯</span> Canary Traps</div>
+    <div class="nav-label">System</div>
+    <div class="nav-item" data-view="service"><span class="ico">⚙</span> Service &amp; Health</div>
+    <div class="engine-card" id="engine-card">
+      <div class="row"><span><span class="live-dot down" id="eng-dot"></span>Engine</span><b id="eng-state">CONNECTING…</b></div>
+      <div class="row"><span>mode</span><b id="eng-mode">–</b></div>
+      <div class="row"><span>uptime</span><b id="eng-uptime">–</b></div>
+      <div class="row"><span>heartbeat</span><b id="eng-hb">–</b></div>
+      <div class="row"><span id="eng-priv-k">privileges</span><b id="eng-priv">–</b></div>
+    </div>
+  </aside>
 
-  <main>
-    <!-- ============ OVERVIEW ============ -->
-    <section class="tab active" id="tab-overview">
-      <div class="cards">
-        <div class="card"><div class="num" id="k-queries">{{ totals.queries }}</div><div class="lbl">queries</div></div>
-        <div class="card alert"><div class="num" id="k-flagged">{{ totals.flagged }}</div><div class="lbl">flagged</div></div>
-        <div class="card alert"><div class="num" id="k-confirmed">{{ totals.confirmed }}</div><div class="lbl">confirmed decodes</div></div>
-        <div class="card alert"><div class="num" id="k-blocked">{{ totals.blocked }}</div><div class="lbl">blocked IPs</div></div>
-        <div class="card good"><div class="num" id="k-rate">–</div><div class="lbl">clean rate</div></div>
-        <div class="card"><div class="num" id="k-qps">–</div><div class="lbl">queries / min (last)</div></div>
-        <div class="card alert"><div class="num" id="k-resp">–</div><div class="lbl">response-channel flags</div></div>
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="view-title">Security Overview</h1>
+        <div class="sub" id="view-sub">Live DNS tunneling &amp; exfiltration surveillance</div>
       </div>
-      <div class="grid2">
-        <div class="panel">
-          <h3>Queries vs flagged — 60s buckets</h3>
-          <canvas id="chart-flow" height="120"></canvas>
+      <div class="spacer"></div>
+      <input class="tsearch" id="global-search" placeholder="Search domain, IP, process…">
+      <span class="chip"><span class="live-dot" id="sse-dot"></span> <span id="sse-state">LIVE</span></span>
+      <button class="btn" id="pause-btn">⏸ Pause</button>
+      <a class="btn primary" style="text-decoration:none" href="/api/export?window=7200" download="exfiltrap-evidence.json">⤓ Export evidence</a>
+    </header>
+
+    <main class="content">
+
+      <!-- ============ OVERVIEW ============ -->
+      <section class="view active" id="view-overview">
+        <div class="kpis">
+          <div class="kpi"><div class="val" id="k-queries">0</div><div class="lbl">Queries</div><span class="trend" id="k-qps"></span></div>
+          <div class="kpi amber"><div class="val" id="k-flagged">0</div><div class="lbl">Flagged</div></div>
+          <div class="kpi red"><div class="val" id="k-confirmed">0</div><div class="lbl">Confirmed decodes</div></div>
+          <div class="kpi purple"><div class="val" id="k-responses">0</div><div class="lbl">Active responses</div></div>
+          <div class="kpi red"><div class="val" id="k-intercepts">0</div><div class="lbl">Sinkhole intercepts</div></div>
+          <div class="kpi green"><div class="val" id="k-clean">–</div><div class="lbl">Clean rate</div></div>
         </div>
-        <div class="panel">
-          <h3>Risk distribution</h3>
-          <canvas id="chart-risk" height="180"></canvas>
+        <div class="grid g-2-1">
+          <div class="panel">
+            <div class="panel-head"><h3>Traffic &amp; detections</h3><span class="hint">60s buckets</span>
+              <div class="spacer"></div><span class="chip">flagged overlay</span></div>
+            <div class="panel-body"><div class="chart-box"><canvas id="chart-flow"></canvas></div></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Risk distribution</h3></div>
+            <div class="panel-body"><div class="chart-box"><canvas id="chart-risk"></canvas></div></div>
+          </div>
         </div>
-      </div>
-      <div class="grid2">
-        <div class="panel">
-          <h3>Top talkers (flagged share)</h3>
-          <div id="top-talkers"></div>
+        <div class="grid g-1-2">
+          <div class="panel">
+            <div class="panel-head"><h3>Tunnel hunt</h3><span class="hint">flagged queries per base domain</span></div>
+            <div class="panel-body" id="tunnel-hunt"><p class="empty">no flagged traffic yet</p></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Latest alerts</h3><span class="hint">click a row for full evidence</span></div>
+            <div class="panel-body flush scroll" style="max-height:300px">
+              <table id="mini-alerts">
+                <thead><tr><th>time</th><th>query</th><th>verdict</th><th>signals</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
         </div>
-        <div class="panel">
-          <h3>Latest alerts</h3>
-          <div class="scroll"><table id="mini-alerts"></table></div>
+      </section>
+
+      <!-- ============ LIVE QUERIES ============ -->
+      <section class="view" id="view-queries">
+        <div class="toolbar">
+          <input id="q-search" placeholder="Filter domain, source, resolver, process…">
+          <select id="q-risk">
+            <option value="">all levels</option>
+            <option>CONFIRMED</option><option>HIGH</option>
+            <option>MEDIUM</option><option>LOW</option>
+          </select>
+          <span class="muted" id="q-count"></span>
         </div>
-      </div>
-    </section>
-
-    <!-- ============ LIVE QUERIES ============ -->
-    <section class="tab" id="tab-queries">
-      <div class="toolbar">
-        <input id="q-search" placeholder="filter by qname or source…" />
-        <select id="q-risk">
-          <option value="">all levels</option>
-          <option>CONFIRMED</option><option>HIGH</option>
-          <option>MEDIUM</option><option>LOW</option>
-        </select>
-        <span class="muted" id="q-count"></span>
-      </div>
-      <div class="panel scroll" style="padding:0">
-        <table id="q-table">
-          <thead><tr><th>time</th><th>src</th><th>qname</th><th>risk</th><th>P(mal)</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- ============ ALERTS ============ -->
-    <section class="tab" id="tab-alerts">
-      <div class="toolbar">
-        <input id="a-search" placeholder="filter alerts…" />
-        <select id="a-risk">
-          <option value="">all levels</option>
-          <option>CONFIRMED</option><option>HIGH</option>
-        </select>
-        <span class="muted" id="a-count"></span>
-      </div>
-      <div class="panel scroll" style="padding:0">
-        <table id="a-table">
-          <thead><tr><th>time</th><th>src</th><th>qname</th><th>risk</th>
-                     <th>reasons</th><th>decoded payload</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- ============ SESSIONS ============ -->
-    <section class="tab" id="tab-sessions">
-      <p class="muted" style="font-size:.8rem">
-        Live per-source sessions from the stateful tracker (M3): the mass
-        z-test compares a session's mean entropy-weighted byte mass against
-        the learned population; the beacon flag marks machine-periodic
-        inter-arrival timing (CV &lt; 0.25).
-      </p>
-      <div class="panel scroll" style="padding:0">
-        <table id="s-table">
-          <thead><tr><th>src</th><th>queries (2h)</th><th>mean mass</th>
-                     <th>cumulative</th><th>interval CV</th><th>signals</th>
-                     <th>last seen</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- ============ BLOCKED ============ -->
-    <section class="tab" id="tab-blocked">
-      <p class="muted" style="font-size:.8rem">
-        Blocks carry a TTL (auto-unban) and can be reversed here — localhost
-        console action only.
-      </p>
-      <div class="panel scroll" style="padding:0">
-        <table id="b-table">
-          <thead><tr><th>src</th><th>since</th><th>risk at block</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div class="panel" style="margin-top:.8rem">
-        <b>Persistent allowlist</b>
-        <span class="muted" style="font-size:.8rem">— these IPs are never blocked; list survives engine restarts</span>
-        <div style="display:flex;gap:.4rem;margin:.5rem 0">
-          <input id="al-ip" placeholder="IP, e.g. 10.0.0.9" style="flex:1">
-          <button id="al-add">allow</button>
+        <div class="panel" style="height: calc(100dvh - 268px)">
+          <div class="panel-body flush scroll">
+            <table id="q-table">
+              <thead><tr><th>time</th><th>query</th><th>verdict</th><th>P(mal)</th>
+                         <th>process</th><th>resolver</th><th>source</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </div>
-        <div id="al-list" class="mono" style="font-size:.8rem"></div>
-      </div>
-      <div class="panel" style="margin-top:.8rem">
-        <b>Muted domains</b>
-        <span class="muted" style="font-size:.8rem">— matching queries are stored but capped at LOW and never blocked (own-host telemetry endpoints, e.g. OTLP/log exporters). Survives restarts.</span>
-        <div style="display:flex;gap:.4rem;margin:.5rem 0">
-          <input id="mu-domain" placeholder="domain, e.g. log.aliyuncs.com" style="flex:1">
-          <button id="mu-add">mute</button>
+      </section>
+
+      <!-- ============ ALERTS ============ -->
+      <section class="view" id="view-alerts">
+        <div class="split">
+          <div class="panel">
+            <div class="panel-head"><h3>Alert queue</h3><span class="hint" id="a-count"></span></div>
+            <div class="panel-body flush scroll">
+              <table id="a-table">
+                <thead><tr><th>time</th><th>query</th><th>verdict</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Evidence</h3><div class="spacer"></div>
+              <a class="btn" href="/api/export?window=7200" download="exfiltrap-evidence.json">⤓ Export window</a></div>
+            <div class="panel-body" id="alert-detail">
+              <p class="empty">select an alert from the queue</p>
+            </div>
+          </div>
         </div>
-        <div id="mu-list" class="mono" style="font-size:.8rem"></div>
-      </div>
-    </section>
-  </main>
+      </section>
 
-  <footer>
-    rows are clickable for full detail · ExFilTrap stateful DNS exfiltration monitor · unprivileged reader of the
-    local detection service · <span class="muted" id="foot-note"></span>
-  </footer>
+      <!-- ============ SESSIONS ============ -->
+      <section class="view" id="view-sessions">
+        <p class="muted" style="margin-top:0;font-size:12px">
+          Stateful per-source tracking (M3): the mass z-test compares a session's
+          entropy-weighted byte mass against the learned population (robust MAD scale,
+          leave-one-source-out); beacon flags machine-periodic timing (CV &lt; 0.25);
+          velocity marks many high-entropy labels under one base domain in 60s.</p>
+        <div class="panel" style="height: calc(100dvh - 300px)">
+          <div class="panel-body flush scroll">
+            <table id="s-table">
+              <thead><tr><th>source</th><th>queries (2h)</th><th>mean mass</th>
+                         <th>cumulative</th><th>interval CV</th><th>signals</th><th>last seen</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
 
-  <script>
-   // ---------------- plumbing ----------------
-   let autoRefresh = true, currentTab = "overview";
-   let flowChart = null, riskChart = null;
-   const $ = (id) => document.getElementById(id);
-   const esc = (s) => String(s ?? "").replace(/[&<>"]/g,
-       (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-   const fmtT = (ts) => new Date(ts * 1000).toLocaleTimeString();
+      <!-- ============ RESPONSES ============ -->
+      <section class="view" id="view-responses">
+        <div class="kpis four">
+          <div class="kpi purple"><div class="val" id="r-sinks">0</div><div class="lbl">Active domain sinks</div></div>
+          <div class="kpi red"><div class="val" id="r-intercepts">0</div><div class="lbl">Intercepted attempts</div></div>
+          <div class="kpi amber"><div class="val" id="r-deferred">–</div><div class="lbl">Response policy</div></div>
+          <div class="kpi green"><div class="val" id="r-drops">0</div><div class="lbl">Source firewall drops</div></div>
+        </div>
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-head"><h3>Response ledger</h3><span class="hint">every automated action, with provenance</span>
+            <div class="spacer"></div><button class="btn danger" id="clear-sinks">✕ Clear all sinks</button></div>
+          <div class="panel-body flush scroll" style="max-height:44dvh">
+            <table id="r-table">
+              <thead><tr><th>time</th><th>action</th><th>target</th><th>triggered by</th>
+                         <th>evidence</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="grid g-1-1">
+          <div class="panel">
+            <div class="panel-head"><h3>Allowlist</h3><span class="hint">never touched · survives restarts</span></div>
+            <div class="panel-body">
+              <div style="display:flex;gap:8px;margin-bottom:10px">
+                <input class="tsearch" id="al-ip" style="flex:1;width:auto" placeholder="IP e.g. 10.0.0.9">
+                <button class="btn" id="al-add">+ Allow</button>
+              </div>
+              <div class="mono" style="font-size:12px;line-height:2" id="al-list"></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Muted domains</h3><span class="hint">stored but capped at LOW</span></div>
+            <div class="panel-body">
+              <div style="display:flex;gap:8px;margin-bottom:10px">
+                <input class="tsearch" id="mu-domain" style="flex:1;width:auto" placeholder="domain e.g. log.my-telemetry.com">
+                <button class="btn" id="mu-add">+ Mute</button>
+              </div>
+              <div class="mono" style="font-size:12px;line-height:2" id="mu-list"></div>
+            </div>
+          </div>
+        </div>
+      </section>
 
-   document.querySelectorAll("nav button").forEach((b) => {
-     b.onclick = () => {
-       document.querySelectorAll("nav button").forEach((x) => x.classList.remove("active"));
-       document.querySelectorAll("section.tab").forEach((x) => x.classList.remove("active"));
-       b.classList.add("active");
-       currentTab = b.dataset.tab;
-       $("tab-" + currentTab).classList.add("active");
-       refresh();
-     };
-   });
-   $("refresh-btn").onclick = () => {
-     autoRefresh = !autoRefresh;
-     $("refresh-btn").textContent = autoRefresh ? "⏸ pause" : "▶ resume";
-   };
+      <!-- ============ CANARY ============ -->
+      <section class="view" id="view-canary">
+        <p class="muted" style="margin-top:0;font-size:12px">
+          Canary trap domains are fake names nothing legitimate resolves. Any query for
+          one is hard evidence — <b style="color:var(--text)">never a false positive by
+          construction</b>. Test a trap from any terminal:
+          <span class="mono" style="color:var(--purple)">dig &lt;trap-name&gt;</span></p>
+        <div class="grid g-1-1">
+          <div class="panel">
+            <div class="panel-head"><h3>Active traps</h3><span class="hint" id="canary-hint"></span></div>
+            <div class="panel-body mono" style="font-size:12px;line-height:2.3" id="canary-list"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Trap hits</h3><span class="hint">every trip is a CONFIRMED alert</span></div>
+            <div class="panel-body">
+              <div class="detail-code" id="canary-hits" style="min-height:80px">no traps tripped — quiet is good</div>
+            </div>
+          </div>
+        </div>
+      </section>
 
-   // ---------------- data loads ----------------
-   async function jget(url) {
-     const r = await fetch(url);
-     return r.ok ? r.json() : null;
-   }
+      <!-- ============ SERVICE ============ -->
+      <section class="view" id="view-service">
+        <div class="grid g-1-1">
+          <div class="panel">
+            <div class="panel-head"><h3>Capture health</h3></div>
+            <div class="panel-body"><dl class="kv" id="svc-capture"></dl></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Response policy</h3></div>
+            <div class="panel-body"><dl class="kv" id="svc-policy"></dl></div>
+          </div>
+        </div>
+        <div class="grid g-1-1">
+          <div class="panel">
+            <div class="panel-head"><h3>Engine</h3></div>
+            <div class="panel-body"><dl class="kv" id="svc-engine"></dl></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Active domain sinks</h3><div class="spacer"></div>
+              <button class="btn danger mini" id="clear-sinks-2">✕ clear</button></div>
+            <div class="panel-body mono" style="font-size:12px;line-height:2" id="svc-sinks"></div>
+          </div>
+        </div>
+      </section>
 
-   async function loadStats() {
-     const d = await jget("/api/stats");
-     if (!d) return;
-     const t = d.totals;
-     $("k-queries").textContent = t.queries;
-     $("k-flagged").textContent = t.flagged;
-     $("k-confirmed").textContent = t.confirmed;
-     $("k-blocked").textContent = t.blocked;
-     $("k-rate").textContent = t.queries ?
-         (100 * (1 - t.flagged / t.queries)).toFixed(1) + "%" : "–";
-     const last = d.timeseries[d.timeseries.length - 1];
-     $("k-qps").textContent = last ? last.queries : "–";
+    </main>
 
-     const ts = d.timeseries;
-     if (typeof Chart === "undefined") return;
-     if (flowChart) {
-       flowChart.data.labels = ts.map((x) => x.bucket);
-       flowChart.data.datasets[0].data = ts.map((x) => x.queries);
-       flowChart.data.datasets[1].data = ts.map((x) => x.flagged);
-       flowChart.update("none");
-     } else {
-       flowChart = new Chart($("chart-flow"), {
-         type: "line",
-         data: { labels: ts.map((x) => x.bucket), datasets: [
-           { label: "queries", data: ts.map((x) => x.queries),
-             borderColor: "#58a6ff", pointRadius: 0, tension: .3 },
-           { label: "flagged", data: ts.map((x) => x.flagged),
-             borderColor: "#f85149", pointRadius: 0, fill: true,
-             backgroundColor: "#f8514922", tension: .3 } ] },
-         options: chartOpts() });
-     }
-     const lv = d.levels || {};
-     const levels = ["LOW", "MEDIUM", "HIGH", "CONFIRMED"];
-     if (riskChart) {
-       riskChart.data.datasets[0].data = levels.map((l) => lv[l] || 0);
-       riskChart.update("none");
-     } else {
-       riskChart = new Chart($("chart-risk"), {
-         type: "doughnut",
-         data: { labels: levels, datasets: [{ data: levels.map((l) => lv[l] || 0),
-           backgroundColor: ["#3fb950", "#58a6ff", "#d29922", "#f85149"],
-           borderColor: "#121821" }] },
-         options: { plugins: { legend: { position: "bottom",
-             labels: { color: "#c9d1d9", boxWidth: 12 } } },
-             cutout: "62%" } });
-     }
-     // top talkers with flagged share bars
-     const maxF = Math.max(1, ...d.top_sources.map((s) => s.flagged));
-     $("top-talkers").innerHTML = d.top_sources.map((s) => `
-       <div style="margin:.45rem 0">
-         <span class="mono">${esc(s.src_ip)}</span>
-         <span class="muted"> · ${s.flagged} flagged / ${s.total}</span>
-         <div class="bar"><i style="width:${(100 * s.flagged / maxF)|0}%"></i></div>
-       </div>`).join("") || '<p class="muted">no traffic yet</p>';
-   }
+    <footer class="ticker">
+      <span class="t-item"><span class="live-dot" id="tick-dot"></span><b id="tick-time">–</b></span>
+      <span class="t-item">capture <b id="tick-capture">–</b></span>
+      <span class="t-item">last alert <b id="tick-alert">none</b></span>
+      <span class="t-item">sinkhole <b id="tick-sink">–</b></span>
+      <span class="spacer"></span>
+      <span class="t-item" id="tick-note">ExfilTrap console</span>
+    </footer>
+  </div>
+</div>
 
-   async function loadStatus() {
-     const s = await jget("/api/status").catch(() => null);
-     if (!s) return;
-     $("svc-mode").textContent = s.mode || "standalone";
-     $("svc-uptime").textContent = s.uptime_s != null ?
-         Math.floor(s.uptime_s / 60) + "m " + Math.floor(s.uptime_s % 60) + "s" : "–";
-     if (s.capture_heartbeat_age_s != null) {
-       $("svc-hb").textContent = s.capture_heartbeat_age_s.toFixed(1) + "s";
-       $("live-dot").classList.toggle("stale", s.capture_heartbeat_age_s > 30);
-     }
-     if (s.capture_healthy === false) {
-       // per-interface capture supervision: name the silent interface(s)
-       const bad = Object.entries(s.capture_ifaces || {})
-         .filter(([, v]) => !v.ok).map(([k]) => k);
-       $("svc-hb").textContent += " ⚠ " +
-           (bad.length ? bad.join("+") + " silent" : "degraded");
-       $("live-dot").classList.add("stale");
-     }
-     $("foot-note").textContent =
-         `${s.queries_processed ?? 0} queries processed this session`;
-   }
+<script>
+"use strict";
+// ======================= plumbing =======================
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g,
+    (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmtT = (ts) => new Date(ts * 1000).toLocaleTimeString();
+const fmtUp = (s) => (s == null ? "–" :
+    Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m");
+let currentView = "overview";
+let autoRefresh = true;
+let flowChart = null, riskChart = null;
+let alertRows = [];          // cached events for the queue/detail panes
+let selectedAlertKey = null;
 
-   async function loadQueries() {
-     const risk = $("q-risk").value;
-     const d = await jget("/api/queries?limit=200" + (risk ? "&risk=" + risk : ""));
-     if (!d) return;
-     const needle = $("q-search").value.toLowerCase();
-     const rows = d.queries.filter((q) =>
-         !needle || q.qname.toLowerCase().includes(needle) ||
-         q.src_ip.includes(needle));
-     $("q-count").textContent = rows.length + " rows";
-     $("q-table").querySelector("tbody").innerHTML = rows.map((q) => `
-       <tr><td>${fmtT(q.ts)}</td><td class="mono">${esc(q.src_ip)}</td>
-       <td class="qname" title="${esc(q.qname)}">${esc(q.qname)}</td>
-       <td><span class="risk risk-${q.risk_level}">${q.risk_level}</span></td>
-       <td>${Number(q.rf_probability).toFixed(3)}</td></tr>`).join("");
-   }
+const TITLES = {
+  overview: ["Security Overview", "Live DNS tunneling & exfiltration surveillance"],
+  queries:  ["Live Queries", "Every DNS query with full attribution: process, resolver, source"],
+  alerts:   ["Alerts", "Verdicts with decoded payloads, ATT&CK mapping and evidence"],
+  sessions: ["Sessions", "Stateful per-source tracking: mass z-test, beacon CV, velocity"],
+  responses:["Responses", "The automated-response ledger: domain sinks, drops, intercepts"],
+  canary:   ["Canary Traps", "Tripwire domains — any resolution is hard evidence"],
+  service:  ["Service & Health", "Capture, privileges, watchdog and policy state"],
+};
 
-   async function loadAlerts() {
-     const d = await jget("/api/events?limit=500");
-     if (!d) return;
-     const risk = $("a-risk").value;
-     const needle = $("a-search").value.toLowerCase();
-     const rows = d.events.filter((e) =>
-         (!risk || e.risk_level === risk) &&
-         (!needle || (e.qname + e.reasons + e.src_ip).toLowerCase().includes(needle)));
-     $("a-count").textContent = rows.length + " alerts";
-     // mini table on overview shows the first 6 regardless of filters
-     const mini = d.events.slice(0, 6).map(alertRow).join("");
-     if (document.querySelector("#mini-alerts tbody") === null) {
-       $("mini-alerts").innerHTML = "<tbody>" + mini + "</tbody>";
-     } else {
-       $("mini-alerts").querySelector("tbody").innerHTML = mini;
-     }
-     $("a-table").querySelector("tbody").innerHTML = rows.map(alertRow).join("");
-   }
+document.querySelectorAll(".nav-item").forEach((el) => {
+  el.onclick = () => {
+    document.querySelectorAll(".nav-item").forEach((x) => x.classList.remove("active"));
+    document.querySelectorAll(".view").forEach((x) => x.classList.remove("active"));
+    el.classList.add("active");
+    currentView = el.dataset.view;
+    $("view-" + currentView).classList.add("active");
+    $("view-title").textContent = TITLES[currentView][0];
+    $("view-sub").textContent = TITLES[currentView][1];
+    refresh();
+  };
+});
 
-   let detailRow = null;  // currently expanded row (one at a time)
+$("pause-btn").onclick = () => {
+  autoRefresh = !autoRefresh;
+  $("pause-btn").textContent = autoRefresh ? "⏸ Pause" : "▶ Resume";
+};
 
-   function toggleDetail(html) {
-     if (detailRow) { detailRow.remove(); detailRow = null; }
-     if (html) {
-       detailRow = document.createElement("tr");
-       detailRow.innerHTML = `<td colspan="6" style="background:#0e141c;
-         border-left:2px solid var(--blue); padding:.6rem .8rem">
-         <div class="mono" style="font-size:.72rem;white-space:pre-wrap"
-              id="detail-box">${html}</div></td>`;
-       return detailRow;
-     }
-     return null;
-   }
+async function jget(url) {
+  try { const r = await fetch(url); return r.ok ? r.json() : null; }
+  catch { return null; }
+}
 
-   function alertRow(e) {
-     const isResp = (e.reasons || "").includes("response channel");
-     const detail = esc(JSON.stringify({
-       time: new Date(e.ts * 1000).toISOString(), src: e.src_ip,
-       qname: e.qname, risk: e.risk_level, reasons: e.reasons,
-       decoded: e.decoded_preview || null,
-     }, null, 2));
-     return `<tr style="cursor:pointer" data-detail="${detail}"
-       onclick="showDetail(this)">
-       <td>${fmtT(e.ts)}</td><td class="mono">${esc(e.src_ip)}</td>
-       <td class="qname" title="${esc(e.qname)}">${esc(e.qname)}</td>
-       <td><span class="risk risk-${e.risk_level}">${e.risk_level}</span>${isResp ? '<span class="flag resp">RESP</span>' : ""}</td>
-       <td class="wrap muted">${esc(e.reasons)}</td>
-       <td class="decoded wrap">${e.confirmed ? esc(e.decoded_preview || "") : ""}</td></tr>`;
-   }
+// ======================= SSE live stream =======================
+let sse = null;
+function connectStream() {
+  if (!window.EventSource) return;
+  try { sse && sse.close(); } catch {}
+  sse = new EventSource("/api/stream");
+  sse.onopen = () => {
+    $("sse-dot").className = "live-dot"; $("sse-state").textContent = "LIVE";
+  };
+  sse.onerror = () => {
+    $("sse-dot").className = "live-dot warn"; $("sse-state").textContent = "POLLING";
+  };
+  sse.onmessage = (ev) => {
+    let d; try { d = JSON.parse(ev.data); } catch { return; }
+    if (d.queries && d.queries.length) onLiveQueries(d.queries);
+    if (d.events && d.events.length) onLiveEvents(d.events);
+  };
+}
+function onLiveQueries(rows) {
+  if (currentView === "queries") prependQueryRows(rows.slice(-30).reverse());
+  const total = rows.length;
+  const navq = $("nav-queries");
+  const cur = parseInt(navq.textContent.replace(/[^0-9]/g, "")) || 0;
+  navq.textContent = (cur ? cur + total : total);
+  navq.classList.remove("hot");
+}
+function onLiveEvents(events) {
+  alertRows = [...events, ...alertRows].slice(0, 300);
+  updateAlertNav();
+  if (currentView === "queries") prependQueryRows(events.map(e => ({
+      ts: e.ts, src_ip: e.src_ip, qname: e.qname, risk_level: e.risk_level,
+      rf_probability: null, resolver: e.resolver, process: e.process })));
+  if (currentView === "alerts") renderAlertQueue();
+  if (currentView === "overview") renderMiniAlerts();
+  const last = events[0];
+  const tick = $("tick-alert");
+  tick.textContent = fmtT(last.ts) + " " + last.risk_level;
+  tick.className = "alert";
+}
 
-   function showDetail(tr) {
-     const text = tr.dataset.detail || "";
-     const row = toggleDetail(text ? `<pre style="margin:0">${text}</pre>` : null);
-     if (row) tr.after(row);
-   }
+// ======================= row renderers =======================
+function procHtml(p) {
+  return p ? `<span class="proc">${esc(p)}</span>`
+           : '<span class="proc none">unknown</span>';
+}
+function resolverHtml(r) {
+  if (!r) return '<span class="faint">–</span>';
+  const byp = /^(8\.8\.|8\.8\.4\.4|1\.1\.1\.1|1\.0\.0\.1|9\.9\.9\.9|149\.112|208\.67|64\.6\.|77\.88\.)/.test(r);
+  return byp ? `<span class="mono" style="color:var(--amber)">${esc(r)} ⚠</span>`
+             : `<span class="mono faint">${esc(r)}</span>`;
+}
+function queryRow(q, flash) {
+  return `<tr class="${flash ? "flash" : ""}">
+    <td class="muted">${fmtT(q.ts)}</td>
+    <td class="qname" title="${esc(q.qname)}">${esc(q.qname)}</td>
+    <td><span class="pill ${esc(q.risk_level)}">${esc(q.risk_level)}</span></td>
+    <td class="num">${q.rf_probability == null ? "–" : Number(q.rf_probability).toFixed(3)}</td>
+    <td>${procHtml(q.process)}</td>
+    <td>${resolverHtml(q.resolver)}</td>
+    <td class="mono faint">${esc(q.src_ip)}</td></tr>`;
+}
+function prependQueryRows(rows) {
+  const tb = $("q-table").querySelector("tbody");
+  tb.insertAdjacentHTML("afterbegin", rows.map((q) => queryRow(q, true)).join(""));
+  while (tb.children.length > 400) tb.removeChild(tb.lastChild);
+  countQueries();
+}
+function signalsHtml(e) {
+  const r = (e.reasons || "");
+  const out = [];
+  if (/canary/i.test(r)) out.push('<span class="tag canary">CANARY</span>');
+  if (/velocity/i.test(r)) out.push('<span class="flag vel">VELOCITY</span>');
+  if (/beacon/i.test(r)) out.push('<span class="flag beacon">BEACON</span>');
+  if (/slow-drip/i.test(r)) out.push('<span class="flag mass">MASS</span>');
+  if (/response channel/i.test(r)) out.push('<span class="flag resp">RESP</span>');
+  if (e.mitre) e.mitre.split(",").filter(Boolean).forEach(
+      (t) => out.push(`<span class="tag mitre">${esc(t)}</span>`));
+  if (e.confirmed && !/canary/i.test(r)) out.push('<span class="tag sink">DECODED</span>');
+  return out.join(" ");
+}
+function alertRow(e) {
+  const key = e.ts + "|" + e.qname;
+  return `<tr data-key="${esc(key)}">
+    <td class="muted">${fmtT(e.ts)}</td>
+    <td class="qname" ${/canary/i.test(e.reasons || "") ? 'style="color:var(--purple)"' : ""}
+        title="${esc(e.qname)}">${esc(e.qname)}</td>
+    <td><span class="pill ${esc(e.risk_level)}">${esc(e.risk_level)}</span></td></tr>`;
+}
+function renderAlertQueue() {
+  const risk = "";
+  const rows = alertRows.filter((e) =>
+      e.risk_level === "HIGH" || e.risk_level === "CONFIRMED");
+  $("a-count").textContent = rows.length + " open";
+  $("a-table").querySelector("tbody").innerHTML = rows.map(alertRow).join("")
+      || '<tr><td colspan="3" class="empty">no open alerts</td></tr>';
+  $("a-table").querySelectorAll("tr[data-key]").forEach((tr) => {
+    tr.onclick = () => {
+      selectedAlertKey = tr.dataset.key;
+      $("a-table").querySelectorAll("tr").forEach((x) => x.classList.remove("sel"));
+      tr.classList.add("sel");
+      const e = rows.find((r) => (r.ts + "|" + r.qname) === selectedAlertKey);
+      if (e) renderAlertDetail(e);
+    };
+  });
+}
+function renderAlertDetail(e) {
+  const isCanary = /canary/i.test(e.reasons || "");
+  $("alert-detail").innerHTML = `
+    <dl class="kv">
+      <dt>verdict</dt><dd><span class="pill ${esc(e.risk_level)}">${esc(e.risk_level)}</span>
+        ${isCanary ? "· canary trap" : ""}</dd>
+      <dt>time</dt><dd>${new Date(e.ts * 1000).toISOString().replace("T", " ").slice(0, 23)}</dd>
+      <dt>query</dt><dd style="${isCanary ? "color:var(--purple)" : ""}">${esc(e.qname)}</dd>
+      <dt>process</dt><dd>${esc(e.process || "unknown (capture started before process lookup, or non-Linux)")}</dd>
+      <dt>resolver</dt><dd>${esc(e.resolver || "–")}</dd>
+      <dt>source</dt><dd>${esc(e.src_ip)}</dd>
+      <dt>ATT&amp;CK</dt><dd>${(e.mitre || "").split(",").filter(Boolean)
+          .map((t) => `<span class="tag mitre">${esc(t)}</span>`).join("") || "–"}</dd>
+    </dl>
+    <div style="font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em;
+                font-weight:700;margin-bottom:6px">Detection reasons</div>
+    <div class="detail-code" style="color:${isCanary ? "var(--purple)" : "#9ee493"}">${
+        esc((e.reasons || "").split("; ").join("\n"))}${
+        e.decoded_preview ? "\n\n↳ decoded: " + esc(e.decoded_preview) : ""}</div>`;
+}
 
-   async function loadSessions() {
-     const d = await jget("/api/sessions");
-     if (!d) return;
-     $("s-table").querySelector("tbody").innerHTML = (d.sessions || []).map((s) => `
-       <tr><td class="mono">${esc(s.src_ip)}</td><td>${s.query_count}</td>
-       <td>${s.mean_mass}</td><td>${s.cumulative_mass}</td>
-       <td>${s.interval_cv == null ? "–" : s.interval_cv}</td>
-       <td>${s.slow_drip ? '<span class="flag drip">MASS</span>' : ""}${s.beacon ? '<span class="flag beacon">BEACON</span>' : ""}</td>
-       <td>${fmtT(s.last_seen)}</td></tr>`).join("") ||
-       '<tr><td colspan="7" class="muted">no sessions — standalone dashboard? run the service for live sessions</td></tr>';
-   }
+// ======================= data loads =======================
+const CHART_COLORS = ["#40c46a", "#4f8ff7", "#e2a336", "#f0524a"];
+function chartOpts() {
+  return { animation: false, maintainAspectRatio: false,
+    interaction: { mode: "index", intersect: false },
+    plugins: { legend: { labels: { color: "#7d8aa3", boxWidth: 10, boxHeight: 10,
+                                   font: { size: 10.5 } } } },
+    scales: { x: { ticks: { color: "#55617a", maxTicksLimit: 10, font: { size: 10 } },
+                   grid: { color: "#161d2e" } },
+              y: { ticks: { color: "#55617a", font: { size: 10 } },
+                   grid: { color: "#161d2e" }, beginAtZero: true } } };
+}
 
-   async function loadBlocked() {
-     const d = await jget("/api/blocked");
-     if (!d) return;
-     const rows = d.blocked;
-     $("b-table").querySelector("tbody").innerHTML = rows.map((x) => `
-       <tr><td class="mono">${esc(x.src_ip)}</td><td>${fmtT(x.ts)}</td>
-       <td><span class="risk risk-${x.risk_level}">${x.risk_level}</span></td>
-       <td><button onclick="unblock('${esc(x.src_ip)}')" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:.15rem .5rem;cursor:pointer;font-size:.7rem">unblock</button></td></tr>`).join("") ||
-       '<tr><td colspan="4" class="muted">none</td></tr>';
-     const al = await jget("/api/allowlist");
-     if (al) $("al-list").innerHTML = al.allowlist.map((x) =>
-       `<div>${esc(x.ip)} <button onclick="delAllowlist('${esc(x.ip)}')" class="muted" style="cursor:pointer;background:none;border:none;color:#8b98a5">✕</button></div>`).join("") ||
-       '<span class="muted">empty</span>';
-     const mu = await jget("/api/mute");
-     if (mu) $("mu-list").innerHTML = mu.muted.map((x) =>
-       `<div>${esc(x.domain)} <button onclick="delMute('${esc(x.domain)}')" class="muted" style="cursor:pointer;background:none;border:none;color:#8b98a5">✕</button></div>`).join("") ||
-       '<span class="muted">empty</span>';
-   }
+async function loadStats() {
+  const d = await jget("/api/stats");
+  if (!d) return;
+  const t = d.totals || {};
+  $("k-queries").textContent = (t.queries ?? 0).toLocaleString();
+  $("k-flagged").textContent = (t.flagged ?? 0).toLocaleString();
+  $("k-confirmed").textContent = (t.confirmed ?? 0).toLocaleString();
+  $("k-clean").textContent = t.queries ?
+      (100 * (1 - t.flagged / t.queries)).toFixed(2) + "%" : "–";
+  const last = (d.timeseries || []).slice(-1)[0];
+  $("k-qps").textContent = last ? "+" + last.queries + "/min" : "";
+  $("k-intercepts").textContent = (t.sinkhole_hits ?? 0).toLocaleString();
 
-   async function addAllowlist() {
-     const ip = $("al-ip").value.trim();
-     if (!ip) return;
-     const r = await fetch("/api/allowlist", { method: "POST",
-       headers: {"Content-Type": "application/json"},
-       body: JSON.stringify({ ip }) });
-     if (r.ok) { $("al-ip").value = ""; loadBlocked(); }
-   }
-   async function delAllowlist(ip) {
-     await fetch("/api/allowlist", { method: "DELETE",
-       headers: {"Content-Type": "application/json"},
-       body: JSON.stringify({ ip }) });
-     loadBlocked();
-   }
-   async function addMute() {
-     const domain = $("mu-domain").value.trim().toLowerCase();
-     if (!domain) return;
-     const r = await fetch("/api/mute", { method: "POST",
-       headers: {"Content-Type": "application/json"},
-       body: JSON.stringify({ domain }) });
-     if (r.ok) { $("mu-domain").value = ""; loadBlocked(); }
-   }
-   async function delMute(domain) {
-     await fetch("/api/mute", { method: "DELETE",
-       headers: {"Content-Type": "application/json"},
-       body: JSON.stringify({ domain }) });
-     loadBlocked();
-   }
-   $("al-add").onclick = addAllowlist;
-   $("mu-add").onclick = addMute;
-   $("al-ip").onkeydown = (e) => { if (e.key === "Enter") addAllowlist(); };
-   $("mu-domain").onkeydown = (e) => { if (e.key === "Enter") addMute(); };
+  if (typeof Chart !== "undefined") {
+    const ts = d.timeseries || [];
+    const labels = ts.map((x) => fmtT(x.bucket));
+    if (flowChart) {
+      flowChart.data.labels = labels;
+      flowChart.data.datasets[0].data = ts.map((x) => x.queries);
+      flowChart.data.datasets[1].data = ts.map((x) => x.flagged);
+      flowChart.update("none");
+    } else {
+      flowChart = new Chart($("chart-flow"), { type: "line",
+        data: { labels, datasets: [
+          { label: "queries", data: ts.map((x) => x.queries),
+            borderColor: "#4f8ff7", borderWidth: 1.6, pointRadius: 0, tension: .35,
+            fill: true, backgroundColor: "rgba(79,143,247,.16)" },
+          { label: "flagged", data: ts.map((x) => x.flagged),
+            borderColor: "#f0524a", borderWidth: 1.6, pointRadius: 0, tension: .35,
+            fill: true, backgroundColor: "rgba(240,82,74,.12)" } ] },
+        options: chartOpts() });
+    }
+    const lv = d.levels || {};
+    const levels = ["LOW", "MEDIUM", "HIGH", "CONFIRMED"];
+    if (riskChart) {
+      riskChart.data.datasets[0].data = levels.map((l) => lv[l] || 0);
+      riskChart.update("none");
+    } else {
+      riskChart = new Chart($("chart-risk"), { type: "doughnut",
+        data: { labels: levels, datasets: [{ data: levels.map((l) => lv[l] || 0),
+          backgroundColor: CHART_COLORS, borderColor: "#101627", borderWidth: 3 }] },
+        options: { cutout: "68%", maintainAspectRatio: false,
+          plugins: { legend: { position: "bottom",
+            labels: { color: "#7d8aa3", boxWidth: 10, font: { size: 10.5 } } } } } });
+    }
+  }
+  // tunnel hunt
+  const doms = d.top_domains || [];
+  const maxF = Math.max(1, ...doms.map((x) => x.flagged));
+  $("tunnel-hunt").innerHTML = doms.length ? doms.map((x) => `
+    <div class="talker"><div class="t"><b>${esc(x.domain)}</b>
+    <span class="muted">${x.flagged} flagged</span></div>
+    <div class="bar"><i style="width:${(100 * x.flagged / maxF) | 0}%"></i></div></div>`).join("")
+    : '<p class="empty">no flagged traffic yet</p>';
+}
 
-   function chartOpts() {
-     return { animation: false, interaction: { mode: "index", intersect: false },
-       plugins: { legend: { labels: { color: "#c9d1d9", boxWidth: 12 } } },
-       scales: { x: { ticks: { color: "#8b98a5", maxTicksLimit: 10 },
-                      grid: { color: "#161e29" } },
-                 y: { ticks: { color: "#8b98a5" }, grid: { color: "#161e29" },
-                      beginAtZero: true } } };
-   }
+async function loadStatus() {
+  const s = await jget("/api/status").catch(() => null);
+  const card = $("engine-card");
+  if (!s || (!s.mode && !s.capture_ifaces)) {
+    // standalone dashboard: no engine attached
+    $("eng-state").textContent = "STANDALONE";
+    $("eng-dot").className = "live-dot warn";
+    $("eng-mode").textContent = "db reader";
+    $("eng-uptime").textContent = "–";
+    $("eng-hb").textContent = "–";
+    $("eng-priv").textContent = "–";
+    $("tick-capture").textContent = "standalone";
+    $("tick-note").textContent = "read-only DB view — run the engine for live capture";
+    renderCanaries(null, []);
+    return;
+  }
+  const healthy = s.capture_healthy !== false;
+  $("eng-state").textContent = "RUNNING";
+  $("eng-dot").className = healthy ? "live-dot" : "live-dot warn";
+  $("eng-mode").textContent = s.mode || "–";
+  $("eng-uptime").textContent = fmtUp(s.uptime_s);
+  if (s.capture_heartbeat_age_s != null)
+    $("eng-hb").textContent = Number(s.capture_heartbeat_age_s).toFixed(1) + "s";
+  const pr = s.privileges || {};
+  $("eng-priv").textContent = pr.is_root ? "root" :
+      (pr.cap_net_raw ? "CAP_NET_RAW" : Object.keys(pr).length ? "limited" : "–");
+  $("tick-capture").textContent = s.mode || "–";
+  $("tick-note").textContent = `${s.queries_processed ?? 0} queries processed this session`;
+  renderCanaries(s.canaries || null, []);
+  renderServiceView(s);
+  loadSinkholeIntoStatus(s);
+}
 
-   function refresh() {
-     loadStats(); loadStatus();
-     if (currentTab === "queries") loadQueries();
-     if (currentTab === "alerts") loadAlerts();
-     if (currentTab === "sessions") loadSessions();
-     if (currentTab === "blocked") loadBlocked();
-   }
-   $("q-risk").onchange = loadQueries;
-   $("a-risk").onchange = loadAlerts;
-   $("q-search").oninput = loadQueries;
-   $("a-search").oninput = loadAlerts;
-   async function unblock(ip) {
-     const r = await fetch("/api/unblock", { method: "POST",
-       headers: {"Content-Type": "application/json"},
-       body: JSON.stringify({src_ip: ip}) });
-     if (r.ok) { loadBlocked(); }
-   }
-   refresh();
-   setInterval(() => { if (autoRefresh && !document.hidden) refresh(); }, 5000);
-  </script>
-  <script type="application/json" id="blocked-json">{{ blocked | tojson }}</script>
+function loadSinkholeIntoStatus(s) {
+  const doms = s.sinkhole_domains;
+  if (doms) { $("r-sinks").textContent = doms.length; $("tick-sink").textContent =
+      `${doms.length} domain${doms.length === 1 ? "" : "s"}`; }
+}
+
+async function loadQueries() {
+  const risk = $("q-risk").value;
+  const d = await jget("/api/queries?limit=300" + (risk ? "&risk=" + risk : ""));
+  if (!d) return;
+  renderQueryTable(d.queries);
+}
+function renderQueryTable(rows) {
+  const needle = $("q-search").value.toLowerCase();
+  const filtered = rows.filter((q) => !needle ||
+      q.qname.toLowerCase().includes(needle) ||
+      (q.src_ip || "").includes(needle) ||
+      (q.resolver || "").includes(needle) ||
+      (q.process || "").toLowerCase().includes(needle));
+  $("q-table").querySelector("tbody").innerHTML =
+      filtered.map((q) => queryRow(q, false)).join("");
+  countQueries(filtered.length, rows.length);
+}
+function countQueries(shown, total) {
+  $("q-count").textContent = shown == null ? "" :
+      `showing ${shown} of ${total}`;
+  const navq = $("nav-queries");
+  if (!navq.textContent || navq.textContent === "–")
+    navq.textContent = total == null ? "–" : total;
+}
+
+async function loadAlerts() {
+  const d = await jget("/api/events?limit=300");
+  if (!d) return;
+  alertRows = d.events;
+  renderAlertQueue();
+  renderMiniAlerts();
+  renderCanaryHits();
+  updateAlertNav();
+  if (!selectedAlertKey && alertRows.length) {
+    const first = alertRows.find((e) => e.risk_level === "CONFIRMED") ||
+        alertRows.find((e) => e.risk_level === "HIGH");
+    if (first) { selectedAlertKey = first.ts + "|" + first.qname;
+      renderAlertDetail(first); }
+  }
+}
+function renderMiniAlerts() {
+  const rows = alertRows.slice(0, 8);
+  $("mini-alerts").querySelector("tbody").innerHTML = rows.map((e) => `
+    <tr><td class="muted">${fmtT(e.ts)}</td>
+    <td class="qname" title="${esc(e.qname)}" ${/canary/i.test(e.reasons || "") ? 'style="color:var(--purple)"' : ""}>${esc(e.qname)}</td>
+    <td><span class="pill ${esc(e.risk_level)}">${esc(e.risk_level)}</span></td>
+    <td>${signalsHtml(e)} ${e.process ? procHtml(e.process) : ""}</td></tr>`).join("")
+    || '<tr><td colspan="4" class="empty">no alerts yet — quiet network</td></tr>';
+}
+function updateAlertNav() {
+  const n = alertRows.filter((e) => e.risk_level === "HIGH" ||
+                                   e.risk_level === "CONFIRMED").length;
+  const el = $("nav-alerts");
+  el.textContent = n;
+  el.classList.toggle("hot", n > 0);
+  const last = alertRows[0];
+  if (last) { $("tick-alert").textContent =
+      fmtT(last.ts) + " " + last.risk_level; $("tick-alert").className = "alert"; }
+}
+
+async function loadSessions() {
+  const d = await jget("/api/sessions");
+  if (!d) return;
+  const rows = d.sessions || [];
+  $("s-table").querySelector("tbody").innerHTML = rows.map((s) => {
+    const flags = [
+      s.slow_drip ? '<span class="flag mass">MASS</span>' : "",
+      s.beacon ? '<span class="flag beacon">BEACON</span>' : "",
+      s.velocity ? '<span class="flag vel">VELOCITY</span>' : "",
+      s.domain_beacon ? '<span class="flag beacon">D-BEACON</span>' : "",
+      s.resp_answer_bytes > 0 ? `<span class="flag resp">RESP ${s.resp_answer_bytes}B</span>` : "",
+    ].join("");
+    return `<tr><td class="mono">${esc(s.src_ip)}</td><td class="num">${s.query_count}</td>
+      <td class="num">${s.mean_mass}</td><td class="num">${s.cumulative_mass}</td>
+      <td class="num">${s.interval_cv == null ? "–" : s.interval_cv}</td>
+      <td>${flags || '<span class="faint">clean</span>'}</td>
+      <td class="muted">${fmtT(s.last_seen)}</td></tr>`;
+  }).join("") || '<tr><td colspan="7" class="empty">no sessions — standalone dashboard? run the engine for live sessions</td></tr>';
+}
+
+async function loadResponses() {
+  const d = await jget("/api/blocked");
+  const sk = await jget("/api/sinkhole");
+  const rows = (d && d.blocked) || [];
+  const drops = rows.filter((r) => r.kind === "source").length;
+  $("r-drops").textContent = drops;
+  if (sk) {
+    $("r-sinks").textContent = (sk.domains || []).length;
+    $("r-intercepts").textContent = (sk.hits || []).length ?
+        (sk.hits[0].total ?? (sk.hits || []).length) : 0;
+    $("tick-sink").textContent = `${(sk.domains || []).length} domains`;
+  }
+  $("r-table").querySelector("tbody").innerHTML = rows.map((r) => `
+    <tr><td class="muted">${fmtT(r.ts)}</td>
+    <td>${r.kind === "domain" ? '<span class="tag sink">DOMAIN SINK</span>'
+                              : '<span class="tag src">SOURCE DROP</span>'}</td>
+    <td class="qname" title="${esc(r.target)}">${esc(r.target)}</td>
+    <td>${r.process ? procHtml(r.process) : `<span class="mono muted">${esc(r.trigger_src || "–")}</span>`}
+        ${r.resolver ? `<span class="faint">via ${esc(r.resolver)}</span>` : ""}</td>
+    <td class="wrap muted">${esc(r.details || "")}${r.qname && r.qname !== r.target ?
+        ` · for <span class="mono">${esc(r.qname)}</span>` : ""}</td>
+    <td><button class="btn mini" onclick="unblock('${esc(r.target)}')">unblock</button></td></tr>`)
+    .join("") || '<tr><td colspan="6" class="empty">no automated responses yet — nothing has tripped the response gate</td></tr>';
+}
+
+let sinkholeEnabled = false;
+async function loadSinkhole() {
+  const sk = await jget("/api/sinkhole");
+  if (!sk) return;
+  sinkholeEnabled = !!sk.enabled;
+  $("r-sinks").textContent = (sk.domains || []).length;
+  const hits = sk.hits || [];
+  $("r-intercepts").textContent = hits.length;
+  $("tick-sink").textContent = `${(sk.domains || []).length} domains · ${hits.length} intercepts`;
+}
+async function renderCanaries(canaries, _hits) {
+  const list = $("canary-list");
+  if (canaries === null) {
+    list.innerHTML = '<span class="faint">canary traps are armed by the engine — run the service to generate them</span>';
+    $("canary-hint").textContent = "";
+    return;
+  }
+  $("canary-hint").textContent = `${canaries.length} armed this run`;
+  list.innerHTML = canaries.map((c) =>
+    `<div>${esc(c)} <button class="btn mini" onclick="copyDig('${esc(c)}')">copy dig</button></div>`)
+    .join("");
+}
+function copyDig(name) {
+  navigator.clipboard && navigator.clipboard.writeText("dig " + name);
+}
+function renderCanaryHits() {
+  const hits = alertRows.filter((e) => /canary/i.test(e.reasons || ""));
+  $("canary-hits").textContent = hits.length ? hits.map((e) =>
+    `${fmtT(e.ts)}  ${e.qname}\n         by ${e.process || "unknown"} · via ${e.resolver || "?"}\n         ${e.risk_level} · ${(e.mitre || "").split(",").filter(Boolean).join(" ")}`)
+    .join("\n\n") : "no traps tripped — quiet is good";
+}
+
+function renderServiceView(s) {
+  const pr = s.privileges || {};
+  const ifaces = Object.entries(s.capture_ifaces || {});
+  $("svc-capture").innerHTML =
+    (ifaces.length ? ifaces.map(([i, v]) =>
+      `<dt>${esc(i)}</dt><dd style="color:${v.ok ? "var(--green)" : "var(--red)"}">${v.ok ?
+      `alive · ${v.age_s}s heartbeat` : "SILENT — restart the engine"}</dd>`).join("")
+      : '<dt>capture</dt><dd class="faint">standalone dashboard — no live capture</dd>') +
+    `<dt>processed</dt><dd>${(s.queries_processed ?? 0).toLocaleString()} queries this session</dd>
+     <dt>watchdog</dt><dd>${s.notify_socket ? "systemd sd_notify · active" : "not under systemd"}</dd>`;
+  const pol = s.policy || {};
+  $("svc-policy").innerHTML = `
+    <dt>sinkhole</dt><dd style="color:${pol.sinkhole ? "var(--green)" : "var(--amber)"}">${pol.sinkhole ?
+      `armed · ${pol.sinkhole_strikes} strike(s) · TTL ${pol.sinkhole_ttl}s` : "off (enable with --sinkhole)"}</dd>
+    <dt>popularity guard</dt><dd>${pol.popularity_guard ? "Tranco + built-ins · active" : "–"}</dd>
+    <dt>self-host guard</dt><dd style="color:var(--green)">${pol.self_dos_guard ?
+      `active · own IPs ${(pol.own_ips || []).join(", ") || "auto"} + loopback never firewalled` : "off"}</dd>
+    <dt>canary traps</dt><dd>${(s.canaries || []).length} armed</dd>`;
+  $("svc-engine").innerHTML = `
+    <dt>mode</dt><dd>${esc(s.mode || "–")}</dd>
+    <dt>uptime</dt><dd>${fmtUp(s.uptime_s)}</dd>
+    <dt>root</dt><dd>${pr.is_root ? "yes" : "no"}</dd>
+    <dt>cap_net_raw</dt><dd>${pr.cap_net_raw ? "yes" : "no"}</dd>
+    <dt>canary traps</dt><dd>${(s.canaries || []).length} generated this run</dd>`;
+  const doms = s.sinkhole_domains || [];
+  $("svc-sinks").innerHTML = doms.length ?
+    doms.map((d) => `0.0.0.0 ${esc(d)} <span class="faint"># active sink</span>`).join("<br>")
+    : '<span class="faint">none armed right now</span>';
+}
+
+async function loadAllowlistMute() {
+  const al = await jget("/api/allowlist");
+  if (al) $("al-list").innerHTML = al.allowlist.map((x) =>
+    `<div>${esc(x.ip)} ${x.note ? `<span class="faint">${esc(x.note)}</span>` : ""}
+     <button class="btn mini" onclick="delAllowlist('${esc(x.ip)}')">✕</button></div>`).join("")
+    || '<span class="faint">empty</span>';
+  const mu = await jget("/api/mute");
+  if (mu) $("mu-list").innerHTML = mu.muted.map((x) =>
+    `<div>${esc(x.domain)} ${x.note ? `<span class="faint">${esc(x.note)}</span>` : ""}
+     <button class="btn mini" onclick="delMute('${esc(x.domain)}')">✕</button></div>`).join("")
+    || '<span class="faint">empty</span>';
+}
+
+// ======================= actions =======================
+async function unblock(target) {
+  await fetch("/api/unblock", { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target }) });
+  loadResponses();
+}
+async function clearSinks() {
+  if (!confirm("Remove every ExfilTrap-managed sink from the hosts file?")) return;
+  await fetch("/api/sinkhole", { method: "DELETE" });
+  loadResponses(); loadSinkhole();
+}
+async function addAllowlist() {
+  const ip = $("al-ip").value.trim();
+  if (!ip) return;
+  await fetch("/api/allowlist", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ip }) });
+  $("al-ip").value = ""; loadAllowlistMute();
+}
+async function delAllowlist(ip) {
+  await fetch("/api/allowlist", { method: "DELETE",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ip }) });
+  loadAllowlistMute();
+}
+async function addMute() {
+  const domain = $("mu-domain").value.trim().toLowerCase();
+  if (!domain) return;
+  await fetch("/api/mute", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain }) });
+  $("mu-domain").value = ""; loadAllowlistMute();
+}
+async function delMute(domain) {
+  await fetch("/api/mute", { method: "DELETE",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain }) });
+  loadAllowlistMute();
+}
+$("al-add").onclick = addAllowlist;
+$("mu-add").onclick = addMute;
+$("al-ip").onkeydown = (e) => { if (e.key === "Enter") addAllowlist(); };
+$("mu-domain").onkeydown = (e) => { if (e.key === "Enter") addMute(); };
+$("clear-sinks").onclick = clearSinks;
+$("clear-sinks-2").onclick = clearSinks;
+$("q-risk").onchange = loadQueries;
+$("q-search").oninput = loadQueries;
+
+// ======================= refresh loop =======================
+function refresh() {
+  loadStats(); loadStatus();
+  if (currentView === "overview" || currentView === "alerts" ||
+      currentView === "canary") loadAlerts();
+  if (currentView === "queries") loadQueries();
+  if (currentView === "sessions") loadSessions();
+  if (currentView === "responses") { loadResponses(); loadSinkhole(); loadAllowlistMute(); }
+  if (currentView === "service") loadSinkhole();
+}
+refresh();
+setInterval(() => { if (autoRefresh && !document.hidden) refresh(); }, 5000);
+setInterval(() => { $("tick-time").textContent = new Date().toLocaleTimeString(); }, 1000);
+connectStream();
+</script>
 </body>
 </html>

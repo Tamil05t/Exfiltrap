@@ -65,6 +65,7 @@ def create_app(db_path=None, status_provider=None, sessions_provider=None,
             response_flags=storage.response_flag_count(),
             timeseries=storage.timeseries(bucket_seconds=60, limit=120),
             top_sources=storage.top_sources(8),
+            top_domains=storage.top_flagged_domains(6),
         )
         cache["v"] = (now, body)
         return jsonify(body)
@@ -186,6 +187,48 @@ def create_app(db_path=None, status_provider=None, sessions_provider=None,
         clear = (sinkhole_provider or {}).get("clear")
         freed = clear() if clear else 0
         return jsonify(ok=True, freed=freed)
+
+    @app.route("/api/stream")
+    def stream():
+        """Server-Sent Events: new queries + alerts pushed ~1s after they
+        land, so the console feels live without hammering /api/queries.
+
+        Reads trail the DB ids (the pipeline is the only writer), which
+        keeps this decoupled from the detection code and working in
+        standalone-dashboard mode too. Flask serves each stream from a
+        worker thread — one console, one stream.
+        """
+        from flask import Response
+
+        storage: Storage = app.config["STORAGE"]
+
+        def gen():
+            last_q = storage.max_query_id()
+            last_e = storage.max_event_id()
+            yield "retry: 3000\n\n"
+            while True:
+                try:
+                    queries = storage.queries_since(last_q, 200)
+                    events = storage.events_since(last_e, 50)
+                    if queries or events:
+                        last_q = queries[-1]["id"] if queries else last_q
+                        last_e = events[-1]["id"] if events else last_e
+                        for e in events:
+                            e.pop("id", None)
+                        payload = json.dumps({"queries": queries,
+                                              "events": events})
+                        yield f"data: {payload}\n\n"
+                    else:
+                        yield ": ping\n\n"
+                except GeneratorExit:
+                    raise
+                except Exception:  # noqa: BLE001 — the stream must survive
+                    yield ": err\n\n"
+                time.sleep(1.0)
+
+        return Response(gen(), mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache",
+                                 "X-Accel-Buffering": "no"})
 
     @app.route("/api/export")
     def export_evidence():

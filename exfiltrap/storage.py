@@ -426,6 +426,45 @@ class Storage:
                 "resolver", "process")
         return [dict(zip(keys, r)) for r in rows]
 
+    def queries_since(self, last_id: int, limit: int = 200) -> list[dict]:
+        """Rows newer than ``last_id`` ascending — drives the SSE stream."""
+        with self._lock:
+            self._flush_locked()
+            rows = self._conn.execute(
+                "SELECT id, ts, src_ip, qname, risk_level, rf_probability,"
+                " resolver, process FROM queries WHERE id > ?"
+                " ORDER BY id ASC LIMIT ?", (last_id, limit)).fetchall()
+        keys = ("id", "ts", "src_ip", "qname", "risk_level",
+                "rf_probability", "resolver", "process")
+        return [dict(zip(keys, r)) for r in rows]
+
+    def events_since(self, last_id: int, limit: int = 100) -> list[dict]:
+        """Risk events newer than ``last_id`` ascending (SSE stream)."""
+        with self._lock:
+            self._flush_locked()
+            rows = self._conn.execute(
+                "SELECT id, ts, src_ip, qname, risk_level, reasons, confirmed,"
+                " decoded_preview, resolver, process, mitre"
+                " FROM risk_events WHERE id > ? ORDER BY id ASC LIMIT ?",
+                (last_id, limit)).fetchall()
+        keys = ("id", "ts", "src_ip", "qname", "risk_level", "reasons",
+                "confirmed", "decoded_preview", "resolver", "process", "mitre")
+        return [dict(zip(keys, r)) for r in rows]
+
+    def max_query_id(self) -> int:
+        with self._lock:
+            self._flush_locked()
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM queries").fetchone()
+        return int(row[0])
+
+    def max_event_id(self) -> int:
+        with self._lock:
+            self._flush_locked()
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM risk_events").fetchone()
+        return int(row[0])
+
     def timeseries(self, bucket_seconds: int = 60, limit: int = 120) -> list[dict]:
         """Per-bucket counts of all queries vs flagged ones, oldest first."""
         with self._lock:

@@ -48,9 +48,9 @@ class TestServiceApi:
         client = app.test_client()
         r = client.get("/")
         assert r.status_code == 200
-        assert b"ExFilTrap" in r.data          # branded header/title
-        assert b"tab-overview" in r.data       # tabbed SPA shell
-        assert b"blocked-json" in r.data       # embedded bootstrap data
+        assert b"ExfilTrap" in r.data          # branded header/title
+        assert b"view-overview" in r.data      # view-based SPA shell
+        assert b"api/stream" in r.data         # SSE live feed wiring
 
     def test_explicit_auto_iface_detection_failure_is_clean(self, monkeypatch, capsys):
         # --iface auto uses default-route detection; on failure it must exit
