@@ -35,6 +35,7 @@ class DNSQuery:
     sport: int = 0        # UDP source port (process-attribution key)
     iface: str = ""       # capture interface the packet arrived on
     process: str = ""     # best-effort socket owner, "name (pid N)"
+    qtype: int = 0        # queried record type (0 = unknown/synthetic)
 
 
 @dataclass(frozen=True)
@@ -72,3 +73,4 @@ class DNSResponse:
     answer_entropy: float
     resolver_ip: str = ""
     answer_ips: tuple[str, ...] = ()
+    rcode: int = 0        # response code (0=NOERROR, 3=NXDOMAIN)

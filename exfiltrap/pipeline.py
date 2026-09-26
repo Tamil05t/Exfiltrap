@@ -74,6 +74,9 @@ class ExfilTrapPipeline:
         # Canary trap domains: nothing legitimate resolves these; any query
         # is hard evidence of a compromised/misbehaving resolver client.
         self._canary: set[str] = set()
+        # 0x20 case-channel detector: lowercased qname -> ([patterns],
+        # last_seen, [timestamps]) — bounded, lazily pruned.
+        self._case_patterns: dict[str, list] = {}
         # System resolver set for bypass detection (set by the service from
         # /etc/resolv.conf; empty = signal disabled rather than guessed).
         self._system_resolvers: set[str] = set()
@@ -92,6 +95,101 @@ class ExfilTrapPipeline:
     def _is_canary(self, qname: str) -> bool:
         q = qname.lower().rstrip(".")
         return any(q == c or q.endswith("." + c) for c in self._canary)
+
+    def _apply_wire_signals(self, q: DNSQuery, assessment, tunnel_qtype: bool):
+        """Post-assessment wire-level signals (floors only ever upgrade).
+
+        These come from the tunnel-tool survey (dnscat2 / iodine builds)
+        and peer detectors (ibHH, dnsink): record-type selection, name
+        malformation, NXDOMAIN ratios, encrypted-DNS bootstraps and 0x20
+        case-channel repetition are facts about THIS query that need no
+        trained model.
+        """
+        reasons = list(assessment.reasons)
+        level = assessment.risk_level
+        order = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CONFIRMED": 3}
+
+        def floor(new_level: str) -> None:
+            nonlocal level
+            if order[new_level] > order[level]:
+                level = new_level
+
+        if tunnel_qtype:
+            floor("HIGH")
+            reasons.append(
+                "tunnel-grade record type queried (NULL / private-use class —"
+                " iodine's default upstream types)")
+        elif getattr(q, "qtype", 0) in config.QTYPE_TUNNEL_FAVORED \
+                and level == "LOW":
+            reasons.append(
+                "tunnel-favored record type (TXT/MX/CNAME — weighed per"
+                " domain, not per query)")
+
+        labels = q.qname.split(".")
+        if any(len(l) > 63 for l in labels) or len(q.qname) > 253:
+            floor("MEDIUM")
+            reasons.append(
+                "malformed name: label/hostname exceeds protocol limits a"
+                " resolver would refuse")
+
+        ratio, n = self.tracker.domain_nxdomain_ratio(q.src_ip, q.qname)
+        if n >= config.NXDOMAIN_MIN_COUNT and ratio >= config.NXDOMAIN_RATIO:
+            floor("MEDIUM")
+            reasons.append(
+                f"NXDOMAIN-heavy zone: {n} answers, {ratio:.0%} refused")
+
+        if self._is_doh_bootstrap(q.qname):
+            reasons.append(
+                "encrypted-DNS bootstrap seen: queries inside that DoH"
+                " channel are INVISIBLE to this sensor (visibility gap)")
+
+        case_hit = self._track_case_pattern(q)
+        if case_hit:
+            floor("MEDIUM")
+            reasons.append(
+                "0x20-style case encoding: same name re-queried under many"
+                " letter-case patterns (bits ride in the case)")
+
+        if reasons == list(assessment.reasons) and level == assessment.risk_level:
+            return assessment
+        return _dc_replace(assessment, risk_level=level, reasons=reasons)
+
+    def _is_doh_bootstrap(self, qname: str) -> bool:
+        q = qname.lower().rstrip(".")
+        return q in config.DOH_BOOTSTRAP_DOMAINS
+
+    def _track_case_pattern(self, q: DNSQuery) -> bool:
+        """Detect repeated identical names whose letter CASE keeps changing.
+
+        Returns True once the distinct-pattern count crosses the config
+        gate. The map is bounded: expired entries are purged when it
+        grows past the cap, so memory stays flat on flood traffic.
+        """
+        import time as _time
+
+        now = _time.monotonic()
+        key = q.qname.lower()
+        pattern = "".join("1" if c.isupper() else "0" for c in q.qname
+                          if c.isalpha())
+        if not pattern:
+            return False
+        entry = self._case_patterns.get(key)
+        if entry is None or now - entry[1] > config.CASE_PATTERN_WINDOW:
+            entry = [{pattern}, now, [now]]
+        else:
+            entry[0].add(pattern)
+            entry[1] = now
+            entry[2].append(now)
+        self._case_patterns[key] = entry
+        if len(self._case_patterns) > 4096:
+            horizon = now - config.CASE_PATTERN_WINDOW
+            for k in [k for k, v in self._case_patterns.items()
+                      if v[1] < horizon]:
+                self._case_patterns.pop(k, None)
+        recent = [t for t in entry[2] if t > now - config.CASE_PATTERN_WINDOW]
+        entry[2][:] = recent
+        return (len(entry[0]) >= config.CASE_PATTERN_MIN_DISTINCT
+                and len(recent) >= config.CASE_PATTERN_MIN_DISTINCT)
 
     def _resolver_bypass(self, q: DNSQuery) -> bool:
         """True when a query skipped the system resolver for a public one.
@@ -140,7 +238,8 @@ class ExfilTrapPipeline:
             return None
         state = self.tracker.update_response(
             resp.client_ip, resp.timestamp,
-            resp.answer_bytes, resp.answer_entropy)
+            resp.answer_bytes, resp.answer_entropy,
+            rcode=getattr(resp, "rcode", None), qname=resp.qname)
         if not state.resp_flag or self.rf_only:
             return None
         from exfiltrap.risk_engine import RiskAssessment
@@ -217,7 +316,7 @@ class ExfilTrapPipeline:
         estimated_bytes = len(features.leftmost_label) * config.BASE32_BITS_PER_CHAR
         state = self.tracker.update(
             q.src_ip, q.timestamp, estimated_bytes, features.entropy,
-            qname=q.qname
+            qname=q.qname, qtype=getattr(q, "qtype", 0),
         )
 
         decode_result = None
@@ -226,7 +325,9 @@ class ExfilTrapPipeline:
             decode_result = decode_query_payload(q.qname)
 
         bypass = self._resolver_bypass(q)
-        domain_signal = bool(state.velocity_candidate or state.domain_beacon)
+        tunnel_qtype = getattr(q, "qtype", 0) in config.QTYPE_TUNNEL_GRADE
+        domain_signal = bool(state.velocity_candidate or state.domain_beacon
+                             or state.qtype_mix_candidate or tunnel_qtype)
         assessment = self.risk_engine.assess(
             q, prob, state.slow_drip_candidate, decode_result,
             query_index=self._index,
@@ -234,6 +335,7 @@ class ExfilTrapPipeline:
             domain_signal=domain_signal,
             bypass_resolver=bypass,
         )
+        assessment = self._apply_wire_signals(q, assessment, tunnel_qtype)
         if bypass and assessment.risk_level == "LOW":
             # A bypassed resolver is a signal on its own: never silent.
             assessment = _dc_replace(assessment, risk_level="MEDIUM")

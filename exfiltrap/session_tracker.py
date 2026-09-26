@@ -34,6 +34,7 @@ class SessionState:
     interval_cv: float | None = None
     velocity_candidate: bool = False
     domain_beacon: bool = False
+    qtype_mix_candidate: bool = False
     resp_answer_bytes: int = 0
     resp_flag: bool = False
 
@@ -92,12 +93,17 @@ class SessionTracker:
         self._cum: dict[str, float] = {}
         self._resp_sessions: dict[str, deque[tuple[float, float]]] = {}
         self._resp_cum: dict[str, float] = {}
-        # Domain-level tracking: (src, base_domain) -> timestamps. The
-        # per-source session mixes attack + legitimate traffic on a real
-        # host (defeating mass/timing per source), but the DOMAIN view
-        # isolates the tunnel: one base domain receiving many high-entropy
-        # labels at machine-regular intervals.
-        self._domain_times: dict[tuple[str, str], deque[float]] = {}
+        # Domain-level tracking: (src, base_domain) -> (ts, qtype, entropy,
+        # label) tuples. The per-source session mixes attack + legitimate
+        # traffic on a real host (defeating mass/timing per source), but
+        # the DOMAIN view isolates the tunnel: one base domain receiving
+        # many DISTINCT high-entropy labels at machine-regular intervals,
+        # or a tunnel-grade record-type mix (NULL/PRIVATE/TXT-heavy).
+        self._domain_times: dict[tuple[str, str], deque] = {}
+        # (src, base_domain) -> (ts, rcode): NXDOMAIN-ratio signal — an
+        # attacker's fake zone refuses everything while the client pumps
+        # labels at it; legit zones answer.
+        self._domain_rcode: dict[tuple[str, str], deque] = {}
         # Anti-desensitization: a sustained attack diet trains the
         # self-learning baseline toward attack traffic (live marathon
         # 2026-09-11: after 5 h of continuous attacks the stateful layer
@@ -135,15 +141,15 @@ class SessionTracker:
 
     def update(
         self, src_ip: str, timestamp: float, estimated_bytes: float, entropy: float,
-        qname: str | None = None,
+        qname: str | None = None, qtype: int = 0,
     ) -> SessionState:
         """Fold one query into its source's window; returns the new state."""
         with self._lock:
             return self._update_locked(src_ip, timestamp, estimated_bytes,
-                                       entropy, qname)
+                                       entropy, qname, qtype)
 
     def _update_locked(self, src_ip, timestamp, estimated_bytes, entropy,
-                       qname=None):
+                       qname=None, qtype=0):
         mass = self.query_mass(estimated_bytes, entropy)
         dq = self._sessions.setdefault(src_ip, deque())
         cutoff = timestamp - self.window_seconds
@@ -156,24 +162,55 @@ class SessionTracker:
         if self.baseline is not None and self._baseline_learning_active():
             self.baseline.update(mass, src_ip)
 
-        # M3c domain-level signals (velocity + per-domain beacon timing).
+        # M3c domain-level signals (velocity + per-domain beacon timing +
+        # tunnel-grade record-type mix).
         velocity_flag = False
         domain_beacon = False
+        qtype_mix = False
         if qname:
+            from exfiltrap.features import leftmost_label
+
             bd = base_domain(qname)
             dq2 = self._domain_times.setdefault((src_ip, bd), deque())
             # keep the full session window: velocity counts the last 60s,
             # the beacon test spans the whole session
             cutoff = timestamp - self.window_seconds
-            while dq2 and dq2[0] <= cutoff:
+            while dq2 and dq2[0][0] <= cutoff:
                 dq2.popleft()
-            dq2.append(timestamp)
-            recent = [ts for ts in dq2 if ts > timestamp - config.DOMAIN_VELOCITY_WINDOW]
+            dq2.append((timestamp, qtype, entropy,
+                        leftmost_label(qname).lower()))
+            recent = [t for (t, _q, _e, _l) in dq2
+                      if t > timestamp - config.DOMAIN_VELOCITY_WINDOW]
+            recent_full = [(t, q, e, l) for (t, q, e, l) in dq2
+                           if t > timestamp - config.DOMAIN_VELOCITY_WINDOW]
+            # entropy path: many high-entropy labels in a short window
             if (len(recent) >= config.DOMAIN_VELOCITY_COUNT
                     and entropy >= config.DOMAIN_VELOCITY_MIN_ENTROPY):
                 velocity_flag = True
+            # cardinality path (ibHH, Akamai NDSS'24): many DISTINCT labels
+            # under one base domain at volume is the exfil signature even
+            # when entropy is masked by lexical/phonotactic encoding.
+            if (not velocity_flag
+                    and len(recent) >= config.DOMAIN_VELOCITY_UNIQUE_LABELS
+                    and len({l for (_t, _q, _e, l) in recent_full})
+                    >= config.DOMAIN_VELOCITY_UNIQUE_LABELS):
+                from exfiltrap import reputation as _rep
+
+                if not _rep.is_popular(bd):
+                    velocity_flag = True
+            # qtype-mix path (tunnel-tool survey: dnscat2 -> TXT/CNAME/MX,
+            # iodine -> NULL/PRIVATE): a base domain whose recent queries
+            # are dominated by tunnel-favored types. Per-domain RATIO —
+            # never per-query (legit TXT carries SPF/DKIM/ACME).
+            favored = [q for (_t, q, _e, _l) in recent_full
+                       if q in config.QTYPE_TUNNEL_GRADE
+                       or q in config.QTYPE_TUNNEL_FAVORED]
+            if (len(recent_full) >= config.QTYPE_MIX_MIN_SAMPLES
+                    and len(favored) / len(recent_full) >= config.QTYPE_MIX_RATIO):
+                qtype_mix = True
             if len(dq2) >= config.DOMAIN_BEACON_MIN_QUERIES:
-                gaps = [b2 - a2 for a2, b2 in zip(list(dq2), list(dq2)[1:])]
+                times = [t for (t, _q, _e, _l) in dq2]
+                gaps = [b2 - a2 for a2, b2 in zip(times, times[1:])]
                 # Judge regularity on the TRAILING gaps only: over a 2 h
                 # window the gap series of an ongoing periodic beacon is
                 # poisoned by every idle period between sessions (one
@@ -183,15 +220,29 @@ class SessionTracker:
                 # detection. The last MIN_QUERIES-1 gaps are exactly the
                 # current machine-periodic run.
                 tail = gaps[-(config.DOMAIN_BEACON_MIN_QUERIES - 1):]
+                tail_ent = [e for (_t, _q, e, _l) in dq2][
+                    -(config.DOMAIN_BEACON_MIN_QUERIES - 1):]
                 if len(tail) >= 2:
                     mean_gap = statistics.fmean(tail)
                     if mean_gap > 0:
                         var = sum((g - mean_gap) ** 2
                                   for g in tail) / len(tail)
                         dcv = (var ** 0.5) / mean_gap
-                        if (dcv < config.DOMAIN_BEACON_MAX_CV
-                                and mean_gap >= config.DOMAIN_BEACON_MIN_INTERVAL):
-                            domain_beacon = True
+                        if dcv < config.DOMAIN_BEACON_MAX_CV:
+                            # classic gate: slow periodicity is C2-like
+                            if mean_gap >= config.DOMAIN_BEACON_MIN_INTERVAL:
+                                domain_beacon = True
+                            # fast track: iodine's DEFAULT ping interval is
+                            # 4s (README "-I"), below the classic gate — a
+                            # 3-5s metronome is only C2-like when the labels
+                            # it carries are high-entropy; benign fast
+                            # keepalives have short, low-entropy labels.
+                            elif (config.DOMAIN_BEACON_FAST_INTERVAL
+                                  <= mean_gap
+                                  and tail_ent
+                                  and (statistics.fmean(tail_ent)
+                                       >= config.DOMAIN_BEACON_FAST_MIN_ENTROPY)):
+                                domain_beacon = True
 
         query_count = len(dq)
         cumulative = self._cum.get(src_ip, 0.0)
@@ -259,6 +310,7 @@ class SessionTracker:
             interval_cv=cv,
             velocity_candidate=velocity_flag,
             domain_beacon=domain_beacon,
+            qtype_mix_candidate=qtype_mix,
         )
 
     def get(self, src_ip: str) -> SessionState | None:
@@ -287,26 +339,47 @@ class SessionTracker:
                 [t for t, _ in list(dq)[-config.BEACON_MIN_QUERIES:]]),
         )
 
+    def domain_nxdomain_ratio(self, src_ip: str, qname: str) -> tuple[float, int]:
+        """(NXDOMAIN share, sample count) for this source+base domain."""
+        from exfiltrap.features import base_domain as _bd
+
+        with self._lock:
+            dq3 = self._domain_rcode.get((src_ip, _bd(qname)))
+            if not dq3:
+                return (0.0, 0)
+            nx = sum(1 for _t, rc in dq3 if rc == 3)
+            return (nx / len(dq3), len(dq3))
+
     def snapshot(self) -> dict[str, SessionState]:
         with self._lock:
             return {ip: self._get_locked(ip) for ip in self._sessions}
 
     def update_response(self, src_ip: str, timestamp: float,
                         answer_bytes: int, answer_entropy: float,
-                        min_answers: int = 5) -> SessionState:
+                        min_answers: int = 5, rcode: int | None = None,
+                        qname: str | None = None) -> SessionState:
         """Fold one DNS response into the client session's answer window.
 
         Flags the session when its mean answer-mass rises >k sigma above
         the learned response population — the download/C2 counterpart of
-        the query-side z-test.
+        the query-side z-test. ``rcode`` (when known) feeds the per-domain
+        NXDOMAIN-ratio signal.
         """
         with self._lock:
             return self._update_response_locked(src_ip, timestamp,
                                                 answer_bytes, answer_entropy,
-                                                min_answers)
+                                                min_answers, rcode, qname)
 
     def _update_response_locked(self, src_ip, timestamp, answer_bytes,
-                                answer_entropy, min_answers):
+                                answer_entropy, min_answers, rcode=None,
+                                qname=None):
+        if rcode is not None and qname:
+            dq3 = self._domain_rcode.setdefault((src_ip, base_domain(qname)),
+                                                deque())
+            cutoff = timestamp - self.window_seconds
+            while dq3 and dq3[0][0] <= cutoff:
+                dq3.popleft()
+            dq3.append((timestamp, rcode))
         weight = min(max(answer_entropy / config.MAX_LABEL_ENTROPY, 0.0), 1.0)
         mass = answer_bytes * weight
         dq = self._resp_sessions.setdefault(src_ip, deque())

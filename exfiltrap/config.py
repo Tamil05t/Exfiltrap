@@ -48,10 +48,23 @@ SESSION_ELEVATION_RATIO = 1.8
 DOMAIN_VELOCITY_COUNT = 15      # queries to one base domain...
 DOMAIN_VELOCITY_WINDOW = 60.0   # ...within this many seconds...
 DOMAIN_VELOCITY_MIN_ENTROPY = 3.0  # ...with labels this entropy or higher
+# ibHH-inspired (Akamai, NDSS'24): unique-label CARDINALITY is the exfil
+# signature even when entropy is masked by lexical/phonotactic encoding —
+# many DISTINCT labels under one base domain at volume is tunnel-grade
+# regardless of how human-looking the labels are. Popular domains (CDNs
+# mint unique labels per fetch) are exempted upstream by the reputation
+# guard, which is what keeps this false-positive-safe.
+DOMAIN_VELOCITY_UNIQUE_LABELS = 12
 DOMAIN_BEACON_MIN_QUERIES = 20  # per-domain observations before beacon test
 BASELINE_STATS_RECOMPUTE_EVERY = 16  # median/MAD recompute cadence (O(W log W) amortized)
 DOMAIN_BEACON_MAX_CV = 0.25
 DOMAIN_BEACON_MIN_INTERVAL = 5.0
+# iodine's default ping interval is 4s (README "-I"), BELOW the 5s gate —
+# default-config iodine would evade the classic beacon test. The fast
+# track admits 3-5s periodicity only when the trailing labels are also
+# high-entropy, which fast benign keepalives (empty/short labels) are not.
+DOMAIN_BEACON_FAST_INTERVAL = 3.0
+DOMAIN_BEACON_FAST_MIN_ENTROPY = 3.0
 # ASSUMPTION: intervals below this CV count as machine-periodic. 0.25 sits
 # far below Poisson noise and above realistic timer jitter.
 BEACON_MAX_CV = 0.25
@@ -134,7 +147,43 @@ ATTACKER_IP = "10.99.0.2"
 VETH_GW = "veth-gw"
 VETH_ATK = "veth-atk"
 DNS_PORT = 53
-CAPTURE_BPF_FILTER = "udp port 53"
+# TCP/53 is a capture blind spot if left out: DNS-over-TCP tunnels exist
+# (and legitimate large answers fall back to TCP), so the sniffer takes both.
+CAPTURE_BPF_FILTER = "udp port 53 or tcp port 53"
+
+# ---------------------------------------------------------------------------
+# Record-type + response signals (from the tunnel-tool survey: dnscat2 uses
+# TXT/CNAME/MX, iodine defaults to NULL and its own PRIVATE class 65399)
+# ---------------------------------------------------------------------------
+# Record types legitimate traffic essentially never queries. A NULL query
+# is RFC-deprecated; class-private types are reserved. One hit is a strong
+# per-query signal.
+QTYPE_TUNNEL_GRADE = (10, 65399)
+# Record types tunnels favor but benign software also uses (TXT carries
+# SPF/DKIM/ACME) — judged as a per-domain RATIO, never per-query.
+QTYPE_TUNNEL_FAVORED = (16, 12, 15)  # TXT, MX, CNAME
+# A base domain whose recent queries are >= this share of favored types
+# (with enough samples) shows tunnel-grade qtype selection.
+QTYPE_MIX_RATIO = 0.5
+QTYPE_MIX_MIN_SAMPLES = 8
+# NXDOMAIN-heavy responses to one base domain: the attacker's fake zone
+# refuses everything while the client keeps pumping labels at it.
+NXDOMAIN_MIN_COUNT = 4
+NXDOMAIN_RATIO = 0.5
+# Well-known encrypted-DNS bootstrap hostnames: seeing them queried means
+# some client knows about DoH — queries inside that channel are invisible
+# to a :53 sensor. Surfaced as a visibility warning, not a verdict.
+DOH_BOOTSTRAP_DOMAINS = (
+    "dns.google", "dns.google.com", "cloudflare-dns.com",
+    "mozilla.cloudflare-dns.com", "dns.quad9.net", "dns.adguard.com",
+    "doh.opendns.com", "use-application-dns.net", "doh.mullvad.net",
+    "doh.dns.sb", "dns.sb", "doh.cleanbrowsing.org", "dns.twnic.tw",
+)
+# 0x20-style case channels repeat the same lowercased name under many case
+# patterns (bits ride in the case of letters). Legit traffic almost never
+# re-queries one name with 3+ different case encodings.
+CASE_PATTERN_MIN_DISTINCT = 3
+CASE_PATTERN_WINDOW = 600.0
 
 # ---------------------------------------------------------------------------
 # M10 — Attacker client defaults

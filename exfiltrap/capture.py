@@ -27,6 +27,31 @@ from exfiltrap import config
 from exfiltrap.events import DNSQuery, DNSResponse
 
 
+def _dns_layer(pkt):
+    """Extract the DNS message from a UDP or TCP packet; None otherwise.
+
+    DNS over TCP carries a 2-byte message-length prefix before the message
+    (RFC 1035 §4.2.2). Scapy does not always bind the DNS dissector onto
+    TCP payloads, so the prefix is stripped and the message parsed
+    explicitly — without this, an entire TCP tunnel is invisible.
+    """
+    if DNS in pkt:
+        return pkt[DNS]
+    from scapy.all import TCP
+
+    if TCP in pkt:
+        raw = bytes(pkt[TCP].payload)
+        if len(raw) <= 2:
+            return None
+        from scapy.all import DNS as _DNS
+
+        try:
+            return _DNS(raw[2:])   # strip the length prefix
+        except Exception:
+            return None
+    return None
+
+
 def _dns_qname(dns) -> str:
     qname = bytes(dns.qd.qname).decode("utf-8", errors="replace")
     return qname[:-1] if qname.endswith(".") else qname
@@ -70,9 +95,9 @@ def packet_to_query(pkt, iface: str = "") -> DNSQuery | None:
     # no exfiltrated payload and are ignored.
     """
     try:
-        if DNS not in pkt or IP not in pkt:
+        dns = _dns_layer(pkt)
+        if dns is None or IP not in pkt:
             return None
-        dns = pkt[DNS]
         if dns.qr != 0 or dns.qd is None:
             return None
         ip = pkt[IP]
@@ -87,6 +112,7 @@ def packet_to_query(pkt, iface: str = "") -> DNSQuery | None:
             sport=sport,
             iface=iface,
             process=procattr.resolve(ip.src, sport) or "",
+            qtype=int(dns.qd.qtype),
         )
     except Exception:
         # Malformed packets must never kill the capture loop.
@@ -101,23 +127,24 @@ def packet_to_response(pkt, iface: str = "") -> DNSResponse | None:
     (A/AAAA/CNAME) are small and low-entropy.
     """
     try:
-        if DNS not in pkt or IP not in pkt:
+        dns = _dns_layer(pkt)
+        if dns is None or IP not in pkt:
             return None
-        dns = pkt[DNS]
-        if dns.qr != 1 or dns.qd is None or not dns.an:
+        if dns.qr != 1 or dns.qd is None:
             return None
         qname = _dns_qname(dns)
+        # NXDOMAIN/SERVFAIL answers carry no records — they are kept anyway:
+        # the rcode-ratio signal needs them (an attacker's fake zone refuses
+        # everything while the client pumps labels at it).
         blob = bytearray()
         count = 0
-        for rr in dns.an:
+        for rr in (dns.an or []):
             try:
                 raw = bytes(rr.rdata)
             except Exception:  # exotic types: fall back to the wire bytes
                 raw = bytes(rr)[10:]
             blob += raw
             count += 1
-        if not count:
-            return None
         from exfiltrap.features import shannon_entropy
 
         return DNSResponse(
@@ -129,6 +156,7 @@ def packet_to_response(pkt, iface: str = "") -> DNSResponse | None:
             answer_entropy=shannon_entropy(blob.decode("latin-1")),
             resolver_ip=pkt[IP].src,
             answer_ips=_answer_ips(dns),
+            rcode=int(dns.rcode),
         )
     except Exception:
         return None
