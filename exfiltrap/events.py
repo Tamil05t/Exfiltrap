@@ -36,6 +36,9 @@ class DNSQuery:
     iface: str = ""       # capture interface the packet arrived on
     process: str = ""     # best-effort socket owner, "name (pid N)"
     qtype: int = 0        # queried record type (0 = unknown/synthetic)
+    qdcount: int = 1      # questions in the packet (>1 is never benign)
+    opcode: int = 0       # 0 = standard QUERY; anything else is rare
+    z: int = 0            # reserved header bits (set = crafted packet)
 
 
 @dataclass(frozen=True)

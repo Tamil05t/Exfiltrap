@@ -112,7 +112,7 @@ class TestSinkholeCacheFlush:
         DomainSinkhole._last_flush = 0.0
         hosts = tmp_path / "hosts"
         hosts.write_text("127.0.0.1 localhost\n")
-        sn = DomainSinkhole(hosts_path=str(hosts), ttl=600.0)
+        sn = DomainSinkhole(hosts_path=str(hosts), ttl=600.0, flush_enabled=True)
         sn.block_domain("a.evil.example")
         sn.block_domain("b.evil.example")   # second sink inside throttle
         assert len(calls) == 1, "flush is throttled to one per 5s"
@@ -128,7 +128,7 @@ class TestSinkholeCacheFlush:
         DomainSinkhole._last_flush = 0.0
         hosts = tmp_path / "hosts"
         hosts.write_text("127.0.0.1 localhost\n")
-        sn = DomainSinkhole(hosts_path=str(hosts), ttl=600.0)
+        sn = DomainSinkhole(hosts_path=str(hosts), ttl=600.0, flush_enabled=True)
         assert sn.block_domain("a.evil.example") is True
         assert "a.evil.example" in hosts.read_text()
 

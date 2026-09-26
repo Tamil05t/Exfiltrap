@@ -113,6 +113,9 @@ def packet_to_query(pkt, iface: str = "") -> DNSQuery | None:
             iface=iface,
             process=procattr.resolve(ip.src, sport) or "",
             qtype=int(dns.qd.qtype),
+            qdcount=int(dns.qdcount or 1),
+            opcode=int(dns.opcode),
+            z=int(getattr(dns, "z", 0) or 0),
         )
     except Exception:
         # Malformed packets must never kill the capture loop.
@@ -202,9 +205,14 @@ class DuplicateFilter:
         ts = getattr(event, "timestamp", None)
         if ts is None:
             return False
+        # qtype + sport in the key: a normal getaddrinfo lookup sends an A
+        # and an AAAA query back-to-back with the SAME qname well inside the
+        # 10 ms window — keying on name alone silently discarded the AAAA.
         key = (type(event).__name__, getattr(event, "src_ip", None),
                getattr(event, "client_ip", None),
-               getattr(event, "qname", None), round(float(ts), 2))
+               getattr(event, "qname", None),
+               getattr(event, "qtype", 0), getattr(event, "sport", 0),
+               round(float(ts), 2))
         with self._lock:
             if key in self._recent:
                 return True

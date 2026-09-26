@@ -132,6 +132,22 @@ class ExfilTrapPipeline:
                 "malformed name: label/hostname exceeds protocol limits a"
                 " resolver would refuse")
 
+        # Header anomalies (Zeek/Suricata practice): legal client traffic
+        # sends exactly one standard QUERY with reserved bits clear.
+        if getattr(q, "qdcount", 1) not in (0, 1):
+            floor("MEDIUM")
+            reasons.append(
+                f"multiple questions in one packet (qdcount={q.qdcount}) —"
+                " never produced by legitimate resolvers")
+        if getattr(q, "opcode", 0) != 0:
+            floor("MEDIUM")
+            reasons.append(
+                f"non-standard DNS opcode {q.opcode} (status/update/notify)")
+        if getattr(q, "z", 0):
+            floor("MEDIUM")
+            reasons.append(
+                "reserved header bits set (Z) — crafted packet marker")
+
         ratio, n = self.tracker.domain_nxdomain_ratio(q.src_ip, q.qname)
         if n >= config.NXDOMAIN_MIN_COUNT and ratio >= config.NXDOMAIN_RATIO:
             floor("MEDIUM")

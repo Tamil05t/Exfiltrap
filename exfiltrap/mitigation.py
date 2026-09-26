@@ -279,14 +279,30 @@ class DomainSinkhole:
     MARKER = "# exfiltrap-managed"
     _QNAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
 
+    # Entries carry their expiry IN the hosts line ("...managed;exp=<epoch>")
+    # so the TTL survives an engine restart. v1.5 wrote a bare marker: those
+    # legacy lines have unknown expiry and are REMOVED at startup — the old
+    # code seeded them as "sunk until reaped" while the reaper only walks
+    # its in-memory expiry map, so a restarted engine could keep a domain
+    # blocked FOREVER. Expiry must live on the wire, not in RAM.
+
+    @classmethod
+    def _entry_line(cls, qname: str, expiry: float, family: str) -> str:
+        return f"{family} {qname} {cls.MARKER};exp={int(expiry)}"
+
     def __init__(self, hosts_path: str = "/etc/hosts",
                  ttl: float = 3600.0, clock=time.time,
                  risk_levels=config.MITIGATION_RISK_LEVELS,
                  strikes: int = 3,
-                 reputation=None):
+                 reputation=None, flush_enabled: bool | None = None):
         self.hosts_path = hosts_path
         self.ttl = ttl
         self.clock = clock
+        # Cache flushing only makes sense for the REAL hosts file (tests
+        # and offline tools use private copies); overridable for tests.
+        self.flush_enabled = (platform.system() == "Linux"
+                              and hosts_path == "/etc/hosts"
+                              if flush_enabled is None else flush_enabled)
         self.risk_levels = risk_levels
         self.strikes = max(1, int(strikes))
         if reputation is None:
@@ -303,28 +319,61 @@ class DomainSinkhole:
         self._sunk: dict[str, float] = {}
         self._hits: dict[str, int] = {}
         self._lock = threading.Lock()
-        for q in self.blocked_domains():
-            self._sunk.setdefault(q, 0.0)   # expiry unknown -> reaped lazily
+        self._adopt_persisted_entries()
+
+    def _adopt_persisted_entries(self) -> None:
+        """Load sinks from a previous run: live entries resume their
+        persisted TTL; expired and legacy (expiry-less) lines are swept."""
+        import re as _re
+
+        now = self.clock()
+        try:
+            with open(self.hosts_path, encoding="utf-8",
+                      errors="replace") as fh:
+                lines = fh.readlines()
+        except OSError:
+            return
+        stale: set[str] = set()
+        kept: list[str] = []
+        for ln in lines:
+            if self.MARKER not in ln:
+                kept.append(ln)
+                continue
+            parts = ln.split()
+            qname = parts[1] if len(parts) >= 2 else ""
+            match = _re.search(r"exp=(\d+)", ln)
+            if qname and match and int(match.group(1)) > now:
+                exp = float(match.group(1))
+                self._sunk.setdefault(qname, exp)
+                self._expires.setdefault(qname, exp)
+                kept.append(ln)
+            else:
+                stale.add(qname)
+        if stale:
+            with open(self.hosts_path, "w", encoding="utf-8",
+                      errors="replace") as fh:
+                fh.writelines(kept)
+            self._flush_resolver_cache()
 
     # -- hosts-file plumbing ------------------------------------------------
-    def _write_entry(self, qname: str) -> None:
+    def _write_entry(self, qname: str, expiry: float) -> None:
         with open(self.hosts_path, "r+", encoding="utf-8", errors="replace") as fh:
-            lines = fh.readlines()
-            have = {ln.strip() for ln in lines}
-            a = f"0.0.0.0 {qname} {self.MARKER}"
-            aaaa = f":: {qname} {self.MARKER}"
-            if a in have and aaaa in have:
+            have = [ln for ln in fh.readlines()
+                    if self.MARKER in ln and f" {qname} " in f" {ln.strip()} "]
+            pending = []
+            for family in ("0.0.0.0", "::"):
+                line = self._entry_line(qname, expiry, family)
+                if not any(ln.strip() == line for ln in have):
+                    pending.append(line + "\n")
+            if not pending:
                 return
             fh.seek(0, 2)   # append; hosts files are read top-to-bottom
-            if a not in have:
-                fh.write(a + "\n")
-            if aaaa not in have:
-                fh.write(aaaa + "\n")
+            fh.writelines(pending)
 
     def _remove_entry(self, qname: str) -> None:
         with open(self.hosts_path, "r+", encoding="utf-8", errors="replace") as fh:
             lines = [ln for ln in fh.readlines()
-                     if not (ln.strip().endswith(self.MARKER)
+                     if not (self.MARKER in ln
                              and f" {qname} " in f" {ln.strip()} ")]
 
         with open(self.hosts_path, "w", encoding="utf-8", errors="replace") as fh:
@@ -377,12 +426,12 @@ class DomainSinkhole:
         return False
 
     def _sink(self, qname: str, base: str, now: float) -> bool:
-        self._write_entry(qname)
         expiry = now + self.ttl
+        self._write_entry(qname, expiry)
         self._expires[qname] = expiry
         self._sunk[qname] = expiry
         if base != qname and not self.reputation.is_popular(base):
-            self._write_entry(base)
+            self._write_entry(base, expiry)
             self._expires.setdefault(base, expiry)
             self._sunk[base] = expiry
         self._flush_resolver_cache()
@@ -408,7 +457,7 @@ class DomainSinkhole:
         if now - DomainSinkhole._last_flush < 5.0:
             return
         DomainSinkhole._last_flush = now
-        if platform.system() != "Linux":
+        if not self.flush_enabled:
             return
         for argv in (("resolvectl", "flush-caches"),
                      ("systemd-resolve", "--flush-caches")):
@@ -443,6 +492,7 @@ class DomainSinkhole:
         self._remove_entry(qname)
         if freed_base and not self.reputation.is_popular(base):
             self._remove_entry(base)
+        self._flush_resolver_cache()
         return True
 
     def is_sunk(self, qname: str) -> bool:
@@ -481,8 +531,7 @@ class DomainSinkhole:
             with open(self.hosts_path, "r", encoding="utf-8",
                       errors="replace") as fh:
                 lines = fh.readlines()
-            kept = [ln for ln in lines
-                    if not ln.strip().endswith(self.MARKER)]
+            kept = [ln for ln in lines if self.MARKER not in ln]
             with open(self.hosts_path, "w", encoding="utf-8",
                       errors="replace") as fh:
                 fh.writelines(kept)
@@ -493,6 +542,7 @@ class DomainSinkhole:
             self._sunk.clear()
             self._convicted_until.clear()
             self._strikes.clear()
+        self._flush_resolver_cache()
         return len(freed)
 
     def reap_expired(self) -> list[str]:
@@ -515,8 +565,7 @@ class DomainSinkhole:
             with open(self.hosts_path, encoding="utf-8", errors="replace") as fh:
                 seen: list[str] = []
                 for ln in fh.readlines():
-                    if not (ln.strip().endswith(self.MARKER)
-                            and len(ln.split()) >= 2):
+                    if not (self.MARKER in ln and len(ln.split()) >= 2):
                         continue
                     name = ln.split()[1]
                     if name not in seen:   # A + AAAA lines share the name
