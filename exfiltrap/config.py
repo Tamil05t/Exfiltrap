@@ -98,6 +98,23 @@ RISK_HIGH_THRESHOLD = 0.85
 RISK_MEDIUM_THRESHOLD = 0.60
 
 # ---------------------------------------------------------------------------
+# Resolver-bypass signal (M3d)
+# ---------------------------------------------------------------------------
+# Well-known public resolvers. When the OS resolver is a loopback stub
+# (127.0.0.53 etc.), a query addressed to one of these SKIPPED the monitored
+# resolution path — classic hardcoded-resolver covert-channel behavior.
+PUBLIC_RESOLVERS = (
+    "8.8.8.8", "8.8.4.4",            # Google
+    "1.1.1.1", "1.0.0.1",            # Cloudflare
+    "9.9.9.9", "149.112.112.112",    # Quad9
+    "208.67.222.222", "208.67.220.220",  # OpenDNS
+    "64.6.64.6", "64.6.65.6",        # Verisign
+    "77.88.8.8", "77.88.8.1",        # Yandex
+    "2001:4860:4860::8888", "2001:4860:4860::8844",
+    "2606:4700:4700::1111", "2606:4700:4700::1001",
+)
+
+# ---------------------------------------------------------------------------
 # M8 — Automated mitigation
 # ---------------------------------------------------------------------------
 MITIGATION_RISK_LEVELS = ("CONFIRMED", "HIGH")

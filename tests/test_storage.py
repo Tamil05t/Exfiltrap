@@ -36,7 +36,54 @@ class TestStorage:
         assert "reason-HIGH" in events[0]["reasons"]
 
         blocked = store.blocked_list()
-        assert blocked == [{"src_ip": "10.0.0.2", "ts": 2.0, "risk_level": "HIGH"}]
+        assert blocked == [{"target": "10.0.0.2", "ts": 2.0, "risk_level": "HIGH",
+                            "kind": "source", "trigger_src": "", "qname": "",
+                            "resolver": "", "process": "", "details": ""}]
+        store.close()
+
+    def test_response_ledger_records_provenance(self, tmp_path):
+        store = Storage(tmp_path / "ledger.sqlite3")
+        store.log_block(2.0, "evil.tunnel.example", "CONFIRMED", kind="domain",
+                        trigger_src="10.0.0.2", qname="x.evil.tunnel.example",
+                        resolver="127.0.0.53", process="curl (pid 99)",
+                        details="domain sinkhole")
+        row = store.blocked_list()[0]
+        assert row["target"] == "evil.tunnel.example"
+        assert row["kind"] == "domain" and row["process"] == "curl (pid 99)"
+        assert row["resolver"] == "127.0.0.53"
+        store.close()
+
+    def test_sinkhole_hits_recorded(self, tmp_path):
+        store = Storage(tmp_path / "hits.sqlite3")
+        store.log_sinkhole_hit(1.0, "a.evil.example", "evil.example")
+        store.log_sinkhole_hit(2.0, "b.evil.example", "evil.example")
+        assert store.totals()["sinkhole_hits"] == 2
+        hits = store.sinkhole_hits_recent()
+        assert hits[0]["qname"] == "b.evil.example"
+        assert all(h["base"] == "evil.example" for h in hits)
+        store.close()
+
+    def test_legacy_block_schema_migrates(self, tmp_path):
+        """A pre-1.5 database (src_ip-keyed blocked_ips) migrates in place
+        with its rows preserved as source blocks."""
+        import sqlite3
+
+        db = tmp_path / "legacy.sqlite3"
+        conn = sqlite3.connect(db)
+        conn.executescript(
+            "CREATE TABLE blocked_ips (src_ip TEXT PRIMARY KEY, ts REAL,"
+            " risk_level TEXT);"
+            "INSERT INTO blocked_ips VALUES ('10.0.0.7', 1.0, 'HIGH');")
+        conn.commit()
+        conn.close()
+        store = Storage(db)
+        rows = store.blocked_list()
+        assert len(rows) == 1
+        assert rows[0]["target"] == "10.0.0.7"
+        assert rows[0]["kind"] == "source"
+        store.log_block(2.0, "x.evil.example", "HIGH", kind="domain",
+                        trigger_src="10.0.0.7", qname="x.evil.example")
+        assert {r["kind"] for r in store.blocked_list()} == {"source", "domain"}
         store.close()
 
     def test_block_dedup(self, tmp_path):

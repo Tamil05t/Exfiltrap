@@ -655,7 +655,9 @@ class TestUnblockFlow:
         store.recent_queries(1)
         c = create_app(tmp_path / "u3.db").test_client()
         body = c.get("/api/blocked").json["blocked"]
-        assert body == [{"src_ip": "10.0.0.7", "ts": 1.0, "risk_level": "HIGH"}]
+        assert body == [{"target": "10.0.0.7", "ts": 1.0, "risk_level": "HIGH",
+                         "kind": "source", "trigger_src": "", "qname": "",
+                         "resolver": "", "process": "", "details": ""}]
         store.close()
 
     def test_service_unblock_provider_removes_row(self, tmp_path):

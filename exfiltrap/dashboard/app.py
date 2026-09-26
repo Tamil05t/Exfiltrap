@@ -7,6 +7,7 @@ Reads the SQLite database written by the pipeline. Run with:
 from __future__ import annotations
 
 import argparse
+import json
 import time
 
 from flask import Flask, jsonify, render_template, request
@@ -17,7 +18,7 @@ from exfiltrap.storage import Storage
 
 def create_app(db_path=None, status_provider=None, sessions_provider=None,
                unblock_provider=None, allowlist_provider=None,
-               mute_provider=None) -> Flask:
+               mute_provider=None, sinkhole_provider=None) -> Flask:
     """Flask app serving the dashboard UI and its JSON API.
 
     ``status_provider`` (used by the service mode) returns a dict of live
@@ -27,6 +28,8 @@ def create_app(db_path=None, status_provider=None, sessions_provider=None,
     ``allowlist_provider`` and ``mute_provider`` are dicts of callables
     (``list``/``add``/``remove``) that let the service apply changes to its
     LIVE state; the DB is updated either way and stays the source of truth.
+    ``sinkhole_provider`` exposes the domain sinkhole's live entries
+    (``list``) and full clear (``clear``) for the responses console.
     """
     app = Flask(__name__)
     app.config["DB_PATH"] = str(db_path if db_path is not None else config.DB_PATH)
@@ -167,6 +170,37 @@ def create_app(db_path=None, status_provider=None, sessions_provider=None,
         storage: Storage = app.config["STORAGE"]
         limit = min(int(request.args.get("limit", 100)), 500)
         return jsonify(events=storage.recent_events(limit))
+
+    # ---- sinkhole console + evidence export ------------------------------
+    @app.route("/api/sinkhole")
+    def sinkhole_list():
+        live = (sinkhole_provider or {}).get("list")
+        domains = live() if live else []
+        storage: Storage = app.config["STORAGE"]
+        return jsonify(domains=domains,
+                       hits=storage.sinkhole_hits_recent(100),
+                       enabled=bool(live))
+
+    @app.route("/api/sinkhole", methods=["DELETE"])
+    def sinkhole_clear():
+        clear = (sinkhole_provider or {}).get("clear")
+        freed = clear() if clear else 0
+        return jsonify(ok=True, freed=freed)
+
+    @app.route("/api/export")
+    def export_evidence():
+        """Evidence pack (JSON): queries, alerts, responses, sinkhole hits
+        inside the window — one citable artifact per incident."""
+        from flask import Response, request as _req
+
+        storage: Storage = app.config["STORAGE"]
+        try:
+            window = float(_req.args.get("window", 3600.0))
+        except ValueError:
+            window = 3600.0
+        window = min(max(window, 60.0), 7 * 24 * 3600.0)
+        body = storage.export_json(window_seconds=window)
+        return Response(json.dumps(body, indent=2), mimetype="application/json")
 
     @app.teardown_appcontext
     def _close(_exc):

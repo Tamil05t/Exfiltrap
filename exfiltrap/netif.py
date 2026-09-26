@@ -5,12 +5,22 @@ internet — it can know: the default-route interface (the one the kernel
 uses for 0.0.0.0/0) is the right one, whether that is eth0, wlan0, wlo1 or
 anything else. Detection is best-effort and returns None when it cannot
 decide, in which case callers list the candidates instead of guessing.
+
+Two host facts drive the response policy and a detection signal:
+
+* ``own_addresses()`` — every address that belongs to THIS machine. The
+  policy layer must never firewall these (blocking the operator's own
+  source IP is the self-DoS failure mode, not a mitigation).
+* ``system_nameservers()`` — the resolvers the OS is configured to use
+  (``/etc/resolv.conf`` / PowerShell). A query addressed anywhere else is
+  a resolver-bypass signal (covert channels skip the monitored stub).
 """
 
 from __future__ import annotations
 
 import platform
 import re
+import socket
 import subprocess
 
 
@@ -78,3 +88,100 @@ def list_interfaces() -> list[str]:
         return [n for n in names if n != "lo"]
     except OSError:
         return []
+
+
+def own_addresses() -> list[str]:
+    """Every unicast address that belongs to this host (best effort).
+
+    Sources, in order: the connect-trick (the kernel picks the source
+    address it would use for the default route), hostname resolution, and
+    a SIOCGIFADDR ioctl per interface. Loopback is handled separately by
+    the policy (any 127/8 or ::1), and nothing here is load-bearing for
+    detection — a miss only means the policy may fall back to asking the
+    operator, never to blocking something blindly.
+    """
+    found: set[str] = set()
+
+    # 1. connect-trick: which source would the kernel use right now?
+    for probe in ("8.8.8.8", "2001:4860:4860::8888"):
+        try:
+            family = socket.AF_INET if ":" not in probe else socket.AF_INET6
+            with socket.socket(family, socket.SOCK_DGRAM) as s:
+                s.connect((probe, 53))
+                found.add(s.getsockname()[0])
+        except OSError:
+            continue
+
+    # 2. hostname resolution
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None):
+            found.add(info[4][0])
+    except OSError:
+        pass
+
+    if platform.system() != "Windows":
+        # 3. per-interface ioctl
+        import fcntl
+        import struct
+        import array
+
+        max_ifaces = 128
+        bytes_ = max_ifaces * 40
+        names = array.array("B", b"\0" * bytes_)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            out_bytes_len, _ = struct.unpack(
+                "iL", fcntl.ioctl(
+                    sock.fileno(), 0x8912,
+                    struct.pack("iL", bytes_, names.buffer_info()[0])))
+            name_list = names.tobytes()
+            for i in range(0, out_bytes_len, 40):
+                iface = name_list[i:i + 16].split(b"\0", 1)[0].decode()
+                try:
+                    addr = fcntl.ioctl(sock.fileno(), 0x8915,
+                                       struct.pack("256s", iface[:15].encode()))
+                    found.add(socket.inet_ntoa(addr[20:24]))
+                except OSError:
+                    continue
+    return sorted(a for a in found if a and not a.startswith("fe80"))
+
+
+def system_nameservers() -> set[str]:
+    """Resolvers the OS is configured to use (best effort, empty on doubt).
+
+    Linux: ``/etc/resolv.conf`` nameserver lines (systemd-resolved shows up
+    as 127.0.0.53). Windows: Get-DnsClientServerAddress via PowerShell.
+    """
+    servers: set[str] = set()
+    if platform.system() == "Windows":
+        try:
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-DnsClientServerAddress -AddressFamily IPv4 | "
+                 "Select-Object -ExpandProperty ServerAddresses)"],
+                capture_output=True, text=True, timeout=15)
+            servers |= {ln.strip() for ln in out.stdout.splitlines()
+                        if _is_ip(ln.strip())}
+        except Exception:  # noqa: BLE001 — detection must never crash setup
+            pass
+        return servers
+    try:
+        with open("/etc/resolv.conf") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == "nameserver":
+                    candidate = parts[1]
+                    if _is_ip(candidate):
+                        servers.add(candidate)
+    except OSError:
+        pass
+    return servers
+
+
+def _is_ip(text: str) -> bool:
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(text)
+        return True
+    except ValueError:
+        return False

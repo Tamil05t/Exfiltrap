@@ -4,6 +4,19 @@ The capture module (M1), the traffic generators (M10) and the evaluation
 harness (M11) all produce :class:`DNSQuery` records, so the type lives in its
 own dependency-free module that every layer can import without pulling in
 scapy or scikit-learn.
+
+Context fields (everything after ``timestamp``) are optional with defaults:
+synthetic generators and old callers construct the plain three-argument form
+and still work. The live capture path fills them in — they answer the
+operator's attribution questions the source IP alone cannot:
+
+* ``dst_ip`` — the resolver the query was sent TO. On a single host the
+  source is always the machine itself (loopback stub or the host's LAN IP),
+  so the resolver identity and the originating process are what make one
+  query distinguishable from another.
+* ``sport`` — the UDP source port, the key process attribution needs.
+* ``process`` — ``"name (pid N)"`` of the socket owner (Linux /proc
+  lookup, best effort).
 """
 
 from __future__ import annotations
@@ -18,6 +31,10 @@ class DNSQuery:
     src_ip: str
     qname: str
     timestamp: float  # unix epoch seconds (synthetic runs may use t=0-based)
+    dst_ip: str = ""      # resolver the query was addressed to
+    sport: int = 0        # UDP source port (process-attribution key)
+    iface: str = ""       # capture interface the packet arrived on
+    process: str = ""     # best-effort socket owner, "name (pid N)"
 
 
 @dataclass(frozen=True)
@@ -40,6 +57,11 @@ class DNSResponse:
     the answer traffic belongs to. ``answer_entropy`` is the Shannon
     entropy of the concatenated answer rdata (encoded C2 payloads score
     near the 5-bit Base32 ceiling; real A/AAAA/CNAME answers are low).
+
+    ``resolver_ip`` is the answering server (the response's source) and
+    ``answer_ips`` holds the A/AAAA records, so a flagged response carries
+    its own evidence: which domain, resolved to which addresses, via which
+    resolver.
     """
 
     client_ip: str
@@ -48,3 +70,5 @@ class DNSResponse:
     answer_count: int
     answer_bytes: int
     answer_entropy: float
+    resolver_ip: str = ""
+    answer_ips: tuple[str, ...] = ()

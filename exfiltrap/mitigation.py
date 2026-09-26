@@ -33,6 +33,7 @@ import os
 import platform
 import re
 import subprocess
+import threading
 import time
 
 from exfiltrap import config
@@ -249,6 +250,28 @@ class DomainSinkhole:
     that exact channel while everything else keeps working. Entries carry
     the block TTL and are removed on expiry.
 
+    Escalation rules (the response acts on the right thing at the right
+    time — a single suspicious-looking query can never take a machine
+    offline, which was the shipped 1.4.0 failure mode):
+
+    * ``CONFIRMED`` (payload decoded from THIS qname) sinks immediately —
+      direct evidence on the exact hostname.
+    * ``HIGH`` needs ``strikes`` (default 3) verdicts accumulating on the
+      same BASE domain before the channel is convicted; on conviction the
+      base domain AND the observed labels sink, and every future label
+      under the base sinks on sight until the TTL expires.
+    * HIGH verdicts carrying ONLY session-level evidence (per-source
+      slow-drip/beacon timing, no domain-specific signal) never sink
+      anything — on a single host that evidence describes the operator's
+      own machine's traffic mix, and acting on it was what sank google.com.
+    * Popular infrastructure (Tranco corpus + built-ins) is refused always.
+
+    Entries cover BOTH address families (``0.0.0.0`` for A and ``::`` for
+    AAAA) — a hosts file with only the IPv4 sink lets the query fall
+    through to real DNS over IPv6. ``cleanup()`` removes every managed
+    entry (graceful shutdown and the dashboard button); a crashed engine
+    therefore never leaves the hosts file poisoned beyond the TTL reaper.
+
     Injection-safe: a qname must match [A-Za-z0-9._-] (no whitespace or
     newlines can reach the hosts file).
     """
@@ -258,21 +281,45 @@ class DomainSinkhole:
 
     def __init__(self, hosts_path: str = "/etc/hosts",
                  ttl: float = 3600.0, clock=time.time,
-                 risk_levels=config.MITIGATION_RISK_LEVELS):
+                 risk_levels=config.MITIGATION_RISK_LEVELS,
+                 strikes: int = 3,
+                 reputation=None):
         self.hosts_path = hosts_path
         self.ttl = ttl
         self.clock = clock
         self.risk_levels = risk_levels
+        self.strikes = max(1, int(strikes))
+        if reputation is None:
+            from exfiltrap import reputation as _rep
+            reputation = _rep
+        self.reputation = reputation
         self._expires: dict[str, float] = {}
+        # base domain -> verdict timestamps (strike accumulation window)
+        self._strikes: dict[str, list[float]] = {}
+        # base domain -> conviction expiry (while set, labels sink on sight)
+        self._convicted_until: dict[str, float] = {}
+        # qname -> expiry of entries actually written (in-memory index of
+        # the hosts file; seeded from it at construction)
+        self._sunk: dict[str, float] = {}
+        self._hits: dict[str, int] = {}
+        self._lock = threading.Lock()
+        for q in self.blocked_domains():
+            self._sunk.setdefault(q, 0.0)   # expiry unknown -> reaped lazily
 
+    # -- hosts-file plumbing ------------------------------------------------
     def _write_entry(self, qname: str) -> None:
         with open(self.hosts_path, "r+", encoding="utf-8", errors="replace") as fh:
             lines = fh.readlines()
-            entry = f"0.0.0.0 {qname} {self.MARKER}\n"
-            if any(entry.strip() == ln.strip() for ln in lines):
+            have = {ln.strip() for ln in lines}
+            a = f"0.0.0.0 {qname} {self.MARKER}"
+            aaaa = f":: {qname} {self.MARKER}"
+            if a in have and aaaa in have:
                 return
             fh.seek(0, 2)   # append; hosts files are read top-to-bottom
-            fh.write(entry)
+            if a not in have:
+                fh.write(a + "\n")
+            if aaaa not in have:
+                fh.write(aaaa + "\n")
 
     def _remove_entry(self, qname: str) -> None:
         with open(self.hosts_path, "r+", encoding="utf-8", errors="replace") as fh:
@@ -283,37 +330,166 @@ class DomainSinkhole:
         with open(self.hosts_path, "w", encoding="utf-8", errors="replace") as fh:
             fh.writelines(lines)
 
+    # -- response decision ----------------------------------------------
     def notify(self, assessment) -> bool:
+        """Evidence-gated sink decision (see class docstring)."""
         if assessment.risk_level not in self.risk_levels:
             return False
-        return self.block_domain(assessment.qname, assessment.timestamp)
+        confirmed = bool(getattr(assessment, "confirmed_exfiltration", False))
+        domain_signal = bool(getattr(assessment, "domain_signal", False))
+        prob = float(getattr(assessment, "rf_probability", 0.0))
+        from exfiltrap import config as _cfg
+        prob_evidence = prob > _cfg.RISK_HIGH_THRESHOLD
+        if not (confirmed or domain_signal or prob_evidence):
+            # Session-level timing evidence only: describes the SOURCE (on a
+            # single host, the operator's own machine). Alert, never sink.
+            return False
+        return self._escalate(assessment.qname, assessment.timestamp,
+                              immediate=confirmed)
 
-    def block_domain(self, qname: str, timestamp: float = 0.0) -> bool:
+    def _escalate(self, qname: str, timestamp: float, immediate: bool) -> bool:
+        from exfiltrap.features import base_domain
+
         qname = (qname or "").strip().rstrip(".")
         if not self._QNAME_RE.fullmatch(qname):
             return False                      # injection attempt: refuse
+        base = base_domain(qname)
+        if self.reputation.is_popular(qname) or self.reputation.is_popular(base):
+            return False                      # popular infrastructure: never
+        now = self.clock()
+        # Strike windows are judged on VERDICT timestamps (packet time) so
+        # the accumulation is independent of this process's clock — mixing
+        # the two time bases silently reset the counter every verdict.
+        with self._lock:
+            if immediate:
+                self._convicted_until[base] = now + self.ttl
+                return self._sink(qname, base, now)
+            if now < self._convicted_until.get(base, 0.0):
+                return self._sink(qname, base, now)   # convicted: on sight
+            times = [t for t in self._strikes.setdefault(base, [])
+                     if t > timestamp - self.ttl]
+            times.append(timestamp)
+            self._strikes[base] = times
+            if len(times) >= self.strikes:
+                self._convicted_until[base] = now + self.ttl
+                self._strikes.pop(base, None)
+                return self._sink(qname, base, now)
+        return False
+
+    def _sink(self, qname: str, base: str, now: float) -> bool:
         self._write_entry(qname)
-        self._expires[qname] = self.clock() + self.ttl
+        expiry = now + self.ttl
+        self._expires[qname] = expiry
+        self._sunk[qname] = expiry
+        if base != qname and not self.reputation.is_popular(base):
+            self._write_entry(base)
+            self._expires.setdefault(base, expiry)
+            self._sunk[base] = expiry
         return True
 
+    # -- public API -------------------------------------------------------
+    def block_domain(self, qname: str, timestamp: float = 0.0) -> bool:
+        """Manual/operator sink: immediate, reputation-checked."""
+        return self._escalate(qname, timestamp or self.clock(), immediate=True)
+
     def unblock_domain(self, qname: str) -> bool:
+        """Reverse a sink: frees the name AND its base conviction (the
+        base was sunk as part of the same channel response)."""
+        from exfiltrap.features import base_domain
+
         qname = (qname or "").strip().rstrip(".")
-        self._expires.pop(qname, None)
+        base = base_domain(qname)
+        with self._lock:
+            self._expires.pop(qname, None)
+            self._sunk.pop(qname, None)
+            self._convicted_until.pop(base, None)
+            self._strikes.pop(base, None)
+            freed_base = base != qname and base in self._sunk
+            if freed_base:
+                self._expires.pop(base, None)
+                self._sunk.pop(base, None)
         self._remove_entry(qname)
+        if freed_base and not self.reputation.is_popular(base):
+            self._remove_entry(base)
         return True
+
+    def is_sunk(self, qname: str) -> bool:
+        """True while a query for this name will be answered 0.0.0.0."""
+        from exfiltrap.features import base_domain
+
+        q = (qname or "").strip().rstrip(".")
+        now = self.clock()
+        with self._lock:
+            exp = self._sunk.get(q)
+            if exp is not None and (exp == 0.0 or exp > now):
+                return True
+            base = base_domain(q)
+            return (now < self._convicted_until.get(base, 0.0)
+                    or base in self._sunk)
+
+    def register_hit(self, qname: str) -> int:
+        """A query reached a sunk domain — count the attempt (evidence the
+        response is working). Returns the running total for that name."""
+        from exfiltrap.features import base_domain
+
+        key = base_domain(qname)
+        with self._lock:
+            self._hits[key] = self._hits.get(key, 0) + 1
+            return self._hits[key]
+
+    def hits(self) -> dict[str, int]:
+        with self._lock:
+            return dict(self._hits)
+
+    def cleanup(self) -> int:
+        """Remove EVERY managed entry from the hosts file (shutdown /
+        dashboard clear). Returns the number of hostnames freed."""
+        freed = self.blocked_domains()
+        try:
+            with open(self.hosts_path, "r", encoding="utf-8",
+                      errors="replace") as fh:
+                lines = fh.readlines()
+            kept = [ln for ln in lines
+                    if not ln.strip().endswith(self.MARKER)]
+            with open(self.hosts_path, "w", encoding="utf-8",
+                      errors="replace") as fh:
+                fh.writelines(kept)
+        except OSError:
+            return 0
+        with self._lock:
+            self._expires.clear()
+            self._sunk.clear()
+            self._convicted_until.clear()
+            self._strikes.clear()
+        return len(freed)
 
     def reap_expired(self) -> list[str]:
         now = self.clock()
-        freed = [q for q, exp in self._expires.items() if exp <= now]
+        with self._lock:
+            freed = [q for q, exp in self._expires.items() if exp <= now]
+            convicted = [b for b, exp in self._convicted_until.items()
+                         if exp <= now]
+            for b in convicted:
+                self._convicted_until.pop(b, None)
+            for q in freed:
+                self._expires.pop(q, None)
+                self._sunk.pop(q, None)
         for q in freed:
-            self.unblock_domain(q)
+            self._remove_entry(q)
         return freed
 
     def blocked_domains(self) -> list[str]:
         try:
             with open(self.hosts_path, encoding="utf-8", errors="replace") as fh:
-                return [ln.split()[1] for ln in fh.readlines()
-                        if ln.strip().endswith(self.MARKER) and len(ln.split()) >= 2]
+                seen: list[str] = []
+                for ln in fh.readlines():
+                    if not (ln.strip().endswith(self.MARKER)
+                            and len(ln.split()) >= 2):
+                        continue
+                    name = ln.split()[1]
+                    if name not in seen:   # A + AAAA lines share the name
+                        seen.append(name)
+                return seen
         except OSError:
             return []
 

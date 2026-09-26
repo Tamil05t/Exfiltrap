@@ -414,7 +414,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sinkhole", action="store_true",
                         help="domain-level response: HIGH/CONFIRMED hostnames "
                              "are answered 0.0.0.0 via the hosts file (needs "
-                             "root; expires with --block-ttl)")
+                             "root; expires with --block-ttl; popular "
+                             "domains are never touched; CONFIRMED decodes "
+                             "sink immediately, probability-only verdicts "
+                             "need --sinkhole-strikes on the same base "
+                             "domain)")
+    parser.add_argument("--sinkhole-strikes", type=int, default=3,
+                        help="HIGH verdicts on one base domain before it is "
+                             "convicted and sunk (default 3; decode-"
+                             "confirmed verdicts always sink immediately)")
+    parser.add_argument("--canary", default="",
+                        help="comma-separated canary trap domains: any query "
+                             "for them is a hard CONFIRMED alert (plus "
+                             "auto-generated per-run traps)")
     parser.add_argument("--alert", choices=("none", "syslog"), default=None,
                         help="SIEM alerting for HIGH/CONFIRMED detections")
     parser.add_argument("--verbose", "-v", action="store_true")
@@ -518,15 +530,25 @@ def main(argv: list[str] | None = None) -> int:
         sinkhole = DomainSinkhole(
             hosts_path=os.environ.get("EXFILTRAP_HOSTS_FILE", "/etc/hosts"),
             ttl=args.block_ttl or 3600.0,
+            strikes=args.sinkhole_strikes,
         )
-        log.info("domain sinkhole enabled: HIGH/CONFIRMED hostnames are "
+        log.info("domain sinkhole enabled: CONFIRMED hostnames sink "
+                 "immediately, probability-only verdicts need %d strikes on "
+                 "one base domain; popular domains are refused; entries are "
                  "answered 0.0.0.0 via %s (TTL %.0fs)",
-                 sinkhole.hosts_path, sinkhole.ttl)
+                 sinkhole.strikes, sinkhole.hosts_path, sinkhole.ttl)
+    # Self-DoS guard: the policy never firewalls this machine's own
+    # addresses — on a single-host deployment every query's source IS the
+    # operator, so the domain response is the surgical action instead.
+    from exfiltrap import netif as _netif
+
+    own_ips = tuple(_netif.own_addresses())
     mitigation = make_policy(
         mitigation,
         allowlist=[a["ip"] for a in storage.allowlist_list()],
         block_ttl=args.block_ttl or 1e18,
         sinkhole=sinkhole,
+        own_ips=own_ips,
     )
     pipeline = ExfilTrapPipeline(
         classifier_path=args.classifier,
@@ -535,6 +557,24 @@ def main(argv: list[str] | None = None) -> int:
         alerter=alerter,
     )
     pipeline.set_muted_domains([m["domain"] for m in storage.muted_list()])
+    # Resolver-bypass signal: queries skipping the OS resolver for a
+    # hardcoded public one. Disabled (never guessed) when resolv.conf
+    # cannot be read.
+    pipeline.set_system_resolvers(_netif.system_nameservers())
+    # Canary traps: operator-supplied names plus per-run generated ones
+    # (nothing legitimate ever resolves either kind; a hit is hard
+    # evidence). The generated set is surfaced via /api/status so the
+    # console can show dig-testable names.
+    import secrets as _secrets
+
+    auto_canaries = [f"{_secrets.token_hex(5)}.canary.exfiltrap.sensor"
+                     for _ in range(8)]
+    cli_canaries = [d.strip().lower() for d in args.canary.split(",") if d.strip()]
+    canary_domains = cli_canaries + auto_canaries
+    pipeline.set_canary_domains(canary_domains)
+    if cli_canaries:
+        log.info("canary traps armed (%d operator + %d generated): e.g. %s",
+                 len(cli_canaries), len(auto_canaries), auto_canaries[0])
     # Warm restart: restore tracker/baseline state saved next to the DB.
     state_path = (args.db or "exfiltrap.db") + ".state.json"
     if args.iface and st_mod.load_state(pipeline.tracker, state_path):
@@ -546,12 +586,19 @@ def main(argv: list[str] | None = None) -> int:
 
     def _request_stop(signum, _frame) -> None:
         stop_event.set()
-        # werkzeug's serve loop only unwinds on KeyboardInterrupt; SIGTERM
-        # otherwise leaves the process alive as an orphan (observed in the
-        # live lab). Give graceful shutdown 5 seconds, then force-exit with
-        # the database flushed.
+        # The hosts file must NEVER stay poisoned past this process: every
+        # exfiltrap-managed entry is removed at shutdown (TTL expiry is the
+        # crash-case fallback, not the normal path).
         def _finalizer() -> None:
             time.sleep(5.0)
+            try:
+                if sinkhole is not None:
+                    freed = sinkhole.cleanup()
+                    if freed:
+                        log.info("shutdown: sinkhole cleared %d hostnames",
+                                 freed)
+            except Exception:  # noqa: BLE001 — shutdown is best effort
+                pass
             try:
                 storage.close()
             finally:
@@ -609,14 +656,17 @@ def main(argv: list[str] | None = None) -> int:
         ]
 
     def _unblock(payload: dict) -> bool:
-        ip = (payload or {}).get("src_ip", "")
+        # The ledger is keyed on TARGET: a source IP (firewall DROP) or a
+        # sunk hostname (domain response) — both reverse here.
+        p = payload or {}
+        target = p.get("target") or p.get("src_ip") or ""
         ok = True
         try:
-            ok = bool(mitigation.unblock(ip))
+            ok = bool(mitigation.unblock(target))
         except Exception as exc:  # noqa: BLE001 — the list must stay operable
-            log.warning("firewall unblock failed for %s: %s", ip, exc)
+            log.warning("firewall unblock failed for %s: %s", target, exc)
         # The blocked-list UI reads this table; it is the source of truth.
-        return storage.remove_block(ip) or ok
+        return storage.remove_block(target) or ok
 
     # Persistent allowlist/mute: writes go to the DB (source of truth) AND
     # the live policy/pipeline state, so changes apply without a restart.
@@ -652,7 +702,14 @@ def main(argv: list[str] | None = None) -> int:
         pipeline.set_muted_domains(muted)
         return storage.muted_remove(dom)
 
-    app = create_app(args.db, status_provider=runtime.status,
+    def _live_status() -> dict:
+        body = runtime.status()
+        body["canaries"] = canary_domains
+        if sinkhole is not None:
+            body["sinkhole_domains"] = sinkhole.blocked_domains()
+        return body
+
+    app = create_app(args.db, status_provider=_live_status,
                      sessions_provider=_sessions_snapshot,
                      unblock_provider=_unblock,
                      allowlist_provider={"list": storage.allowlist_list,
@@ -660,7 +717,11 @@ def main(argv: list[str] | None = None) -> int:
                                          "remove": _allowlist_remove},
                      mute_provider={"list": storage.muted_list,
                                     "add": _mute_add,
-                                    "remove": _mute_remove})
+                                    "remove": _mute_remove},
+                     sinkhole_provider={"list": (lambda: sinkhole.blocked_domains()
+                                                 if sinkhole else []),
+                                        "clear": (lambda: sinkhole.cleanup()
+                                                  if sinkhole else 0)})
     log.info("API + dashboard on http://%s:%d (Ctrl+C to stop)",
              args.api_host, args.api_port)
     try:

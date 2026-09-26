@@ -71,6 +71,52 @@ class ExfilTrapPipeline:
         self.risk_engine = risk_engine if risk_engine is not None else RiskEngine()
         self.alerter = alerter
         self._index = 0
+        # Canary trap domains: nothing legitimate resolves these; any query
+        # is hard evidence of a compromised/misbehaving resolver client.
+        self._canary: set[str] = set()
+        # System resolver set for bypass detection (set by the service from
+        # /etc/resolv.conf; empty = signal disabled rather than guessed).
+        self._system_resolvers: set[str] = set()
+        self._public_resolvers: set[str] = set(config.PUBLIC_RESOLVERS)
+
+    # ------------------------------------------------------------------
+    def set_canary_domains(self, domains: Iterable[str]) -> None:
+        """Replace the canary-trap set (service wires --canary + autos)."""
+        self._canary = {d.lower().strip().rstrip(".")
+                        for d in domains if d.strip()}
+
+    def set_system_resolvers(self, resolvers: Iterable[str]) -> None:
+        """Resolver identities considered 'the system's own' (bypass signal)."""
+        self._system_resolvers = {r.strip() for r in resolvers if r.strip()}
+
+    def _is_canary(self, qname: str) -> bool:
+        q = qname.lower().rstrip(".")
+        return any(q == c or q.endswith("." + c) for c in self._canary)
+
+    def _resolver_bypass(self, q: DNSQuery) -> bool:
+        """True when a query skipped the system resolver for a public one.
+
+        Conservative by design: it fires only when a local stub IS the
+        system resolver (loopback nameserver in resolv.conf) and the query
+        is addressed to a hardcoded public resolver instead — the classic
+        covert-channel behavior. Without that stub the signal stays off
+        (the uplink query could be the stub's own forwarder).
+        """
+        dst = getattr(q, "dst_ip", "") or ""
+        if not dst or not self._system_resolvers:
+            return False
+        if not any(r.startswith("127.") or r == "::1"
+                   for r in self._system_resolvers):
+            return False
+        try:
+            import ipaddress as _ipa
+
+            dst_ip = _ipa.ip_address(dst)
+        except ValueError:
+            return False
+        if dst_ip.is_loopback or dst_ip.is_link_local or dst_ip.is_private:
+            return False
+        return dst in self._public_resolvers
 
     # ------------------------------------------------------------------
     def process_query(self, q: DNSQuery) -> RiskAssessment:
@@ -84,7 +130,14 @@ class ExfilTrapPipeline:
 
         Responses are NOT inserted into the queries table (that would skew
         per-query metrics); a flagged response becomes a risk event + alert.
+        Popular domains never flag: ambient CDN/telemetry answer mass on
+        the top sites tripped this channel on real desktops (observed live
+        on github.com) — the reputation guard removes that noise class.
         """
+        from exfiltrap import reputation
+
+        if reputation.is_popular(resp.qname):
+            return None
         state = self.tracker.update_response(
             resp.client_ip, resp.timestamp,
             resp.answer_bytes, resp.answer_entropy)
@@ -99,7 +152,9 @@ class ExfilTrapPipeline:
             reasons=[f"response channel: answer mass "
                      f"{state.resp_answer_bytes}B in window, "
                      "entropy-weighted z above baseline"],
-            rf_probability=0.0, query_index=self._index)
+            rf_probability=0.0, query_index=self._index,
+            resolver=getattr(resp, "resolver_ip", "") or "",
+            domain_signal=False)
         self.storage.log_risk_event(assessment)
         if self.alerter is not None:
             self.alerter.send(assessment)
@@ -136,6 +191,29 @@ class ExfilTrapPipeline:
         if self.rf_only:
             return self._process_rf_only(q, prob)
 
+        # Canary trap: checked before every other signal. Nothing
+        # legitimate resolves these names — a hit is hard evidence, and
+        # never a false positive by construction.
+        if self._is_canary(q.qname):
+            assessment = RiskAssessment(
+                src_ip=q.src_ip, qname=q.qname, timestamp=q.timestamp,
+                risk_level="CONFIRMED",
+                reasons=["canary trap: fake domain resolved — the querying "
+                         "process is using DNS without legitimate cause"],
+                rf_probability=prob, query_index=self._index,
+                confirmed_exfiltration=True,
+                resolver=getattr(q, "dst_ip", "") or "",
+                process=getattr(q, "process", "") or "",
+                domain_signal=True)
+            self.storage.log_query(assessment)
+            self.storage.log_risk_event(assessment)
+            if self.alerter is not None:
+                self.alerter.send(assessment)
+            log.warning("CANARY hit from %s (process=%s): %s",
+                        q.src_ip, getattr(q, "process", "") or "unknown",
+                        q.qname)
+            return assessment
+
         estimated_bytes = len(features.leftmost_label) * config.BASE32_BITS_PER_CHAR
         state = self.tracker.update(
             q.src_ip, q.timestamp, estimated_bytes, features.entropy,
@@ -147,11 +225,18 @@ class ExfilTrapPipeline:
                 or state.slow_drip_candidate or state.beacon_candidate):
             decode_result = decode_query_payload(q.qname)
 
+        bypass = self._resolver_bypass(q)
+        domain_signal = bool(state.velocity_candidate or state.domain_beacon)
         assessment = self.risk_engine.assess(
             q, prob, state.slow_drip_candidate, decode_result,
             query_index=self._index,
             beacon_candidate=state.beacon_candidate,
+            domain_signal=domain_signal,
+            bypass_resolver=bypass,
         )
+        if bypass and assessment.risk_level == "LOW":
+            # A bypassed resolver is a signal on its own: never silent.
+            assessment = _dc_replace(assessment, risk_level="MEDIUM")
         if self._is_muted(q.qname) and assessment.risk_level != "LOW":
             # Operator-muted domain (own-host telemetry etc.): keep the
             # row for transparency, cap the verdict, never alert/block.
@@ -161,6 +246,19 @@ class ExfilTrapPipeline:
                 reasons=[f"muted domain (operator): {assessment.risk_level} suppressed"])
 
         self.storage.log_query(assessment)
+        # Sinkhole interception evidence: the channel is already cut and
+        # something is STILL asking — log the attempt for the console.
+        sinkhole = getattr(self.mitigation, "sinkhole", None)
+        if sinkhole is not None:
+            try:
+                if sinkhole.is_sunk(q.qname):
+                    sinkhole.register_hit(q.qname)
+                    from exfiltrap.features import base_domain as _bd
+
+                    self.storage.log_sinkhole_hit(q.timestamp, q.qname,
+                                                  _bd(q.qname))
+            except Exception:  # noqa: BLE001 — evidence is best effort
+                pass
         if assessment.risk_level in ("HIGH", "CONFIRMED"):
             self.storage.log_risk_event(assessment)
             if self.alerter is not None:
@@ -174,14 +272,36 @@ class ExfilTrapPipeline:
                 freeze(300.0)
             # A mitigation failure (safety refusal, missing binary, hung
             # subprocess) must NEVER take down the detection loop: log it
-            # and keep detecting.
+            # and keep detecting. The response ledger records WHAT the
+            # policy acted on (sunk domain vs remote source IP), not just
+            # that something fired — the policy layer knows the target.
             try:
                 already = getattr(self.mitigation, "is_blocked", None)
                 if self.mitigation.notify(assessment):
-                    self.storage.log_block(q.timestamp, q.src_ip,
-                                           assessment.risk_level)
+                    kind = getattr(self.mitigation, "last_response",
+                                   "source") or "source"
+                    target = (getattr(self.mitigation, "last_target", "")
+                              or q.src_ip)
+                    self.storage.log_block(
+                        q.timestamp, target, assessment.risk_level,
+                        kind=("domain" if kind == "domain" else "source"),
+                        trigger_src=q.src_ip, qname=q.qname,
+                        resolver=assessment.resolver,
+                        process=assessment.process,
+                        details=("domain sinkhole: hostname answered"
+                                 " 0.0.0.0" if kind == "domain" else
+                                 "source firewall drop"))
                 elif already is not None and already(q.src_ip):
                     pass  # duplicate: block already in place, by design
+                elif (getattr(self.mitigation, "last_response", "")
+                      == "deferred"):
+                    # Own-host source with the self-DoS guard active: the
+                    # domain-level response is the designed action (or the
+                    # operator chose no sinkhole) — informational, not a
+                    # backend refusal.
+                    log.info("own-host HIGH on %s: source block deferred "
+                             "(self-DoS guard; sinkhole=%s)",
+                             q.src_ip, self.mitigation.sinkhole is not None)
                 else:
                     log.error("mitigation REFUSED block for %s (risk=%s) — "
                               "check backend errors/allowlist",

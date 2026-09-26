@@ -3,10 +3,20 @@
 Scapy sniffer on a single interface (``veth-gw`` inside namespace ``nsA``
 in the lab topology), filtered to UDP/53. Parsed queries are pushed onto a
 thread-safe queue for the pipeline's processing thread.
+
+Every parsed event carries its **context**, because on a real single-host
+deployment the source IP alone is always the machine itself:
+
+* ``dst_ip`` — the resolver the query was sent to / the server that answered,
+* ``sport`` — the UDP source port (the process-attribution key),
+* ``iface`` — which capture interface the packet arrived on,
+* ``process`` — best-effort socket owner via /proc (Linux only).
+* responses additionally carry the A/AAAA answer IPs as evidence.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import queue
 import threading
 
@@ -17,7 +27,43 @@ from exfiltrap import config
 from exfiltrap.events import DNSQuery, DNSResponse
 
 
-def packet_to_query(pkt) -> DNSQuery | None:
+def _dns_qname(dns) -> str:
+    qname = bytes(dns.qd.qname).decode("utf-8", errors="replace")
+    return qname[:-1] if qname.endswith(".") else qname
+
+
+def _answer_ips(dns) -> tuple[str, ...]:
+    """A/AAAA records from the answer section — the resolved addresses.
+
+    rdata form varies by scapy version (2.6 returns dotted strings for A;
+    older builds return raw 4/16-byte blobs) — both are accepted.
+    """
+    import ipaddress
+
+    ips: list[str] = []
+    for rr in dns.an:
+        try:
+            if rr.type not in (1, 28) or rr.rdata is None:
+                continue
+            if rr.type == 1:
+                data = rr.rdata
+                if not isinstance(data, str):
+                    data = str(ipaddress.IPv4Address(bytes(data)))
+                ipaddress.IPv4Address(data)   # validation
+                ips.append(data)
+            else:
+                data = rr.rdata
+                if isinstance(data, str):
+                    ipaddress.IPv6Address(data)  # validation
+                    ips.append(data)
+                else:
+                    ips.append(str(ipaddress.IPv6Address(bytes(data))))
+        except Exception:  # noqa: BLE001 — evidence is best effort
+            continue
+    return tuple(ips)
+
+
+def packet_to_query(pkt, iface: str = "") -> DNSQuery | None:
     """Pure scapy-packet -> DNSQuery conversion; None for anything else.
 
     # ASSUMPTION: the detector only needs queries (qr=0); responses carry
@@ -29,20 +75,25 @@ def packet_to_query(pkt) -> DNSQuery | None:
         dns = pkt[DNS]
         if dns.qr != 0 or dns.qd is None:
             return None
-        qname = bytes(dns.qd.qname).decode("utf-8", errors="replace")
-        if qname.endswith("."):
-            qname = qname[:-1]
+        ip = pkt[IP]
+        sport = int(getattr(ip, "sport", 0) or 0)
+        from exfiltrap import procattr
+
         return DNSQuery(
-            src_ip=pkt[IP].src,
-            qname=qname,
+            src_ip=ip.src,
+            qname=_dns_qname(dns),
             timestamp=float(pkt.time),
+            dst_ip=ip.dst,
+            sport=sport,
+            iface=iface,
+            process=procattr.resolve(ip.src, sport) or "",
         )
     except Exception:
         # Malformed packets must never kill the capture loop.
         return None
 
 
-def packet_to_response(pkt) -> DNSResponse | None:
+def packet_to_response(pkt, iface: str = "") -> DNSResponse | None:
     """Parse a DNS reply into its download-channel facts; None otherwise.
 
     A tunnel's C2 answers carry encoded data (TXT/NULL rdata): high
@@ -55,9 +106,7 @@ def packet_to_response(pkt) -> DNSResponse | None:
         dns = pkt[DNS]
         if dns.qr != 1 or dns.qd is None or not dns.an:
             return None
-        qname = bytes(dns.qd.qname).decode("utf-8", errors="replace")
-        if qname.endswith("."):
-            qname = qname[:-1]
+        qname = _dns_qname(dns)
         blob = bytearray()
         count = 0
         for rr in dns.an:
@@ -78,6 +127,8 @@ def packet_to_response(pkt) -> DNSResponse | None:
             answer_count=count,
             answer_bytes=len(blob),
             answer_entropy=shannon_entropy(blob.decode("latin-1")),
+            resolver_ip=pkt[IP].src,
+            answer_ips=_answer_ips(dns),
         )
     except Exception:
         return None
@@ -136,9 +187,9 @@ class DuplicateFilter:
             return False
 
 
-def _classify(pkt):
+def _classify(pkt, iface: str = ""):
     """Sniffer callback body: queries and responses both reach the pipeline."""
-    return packet_to_query(pkt) or packet_to_response(pkt)
+    return packet_to_query(pkt, iface) or packet_to_response(pkt, iface)
 
 
 def make_sniffer(iface: str | list[str],
@@ -150,9 +201,12 @@ def make_sniffer(iface: str | list[str],
     they reach the pipeline — see DuplicateFilter.
     """
     deduper = make_deduper() if dedup else None
+    # A single-name iface tags every event with itself; 'any' or a list
+    # cannot attribute the interface per packet, so events stay untagged.
+    iface_tag = iface if isinstance(iface, str) and iface != "any" else ""
 
     def _prn(pkt) -> None:
-        event = _classify(pkt)
+        event = _classify(pkt, iface_tag)
         if event is None:
             return
         if deduper is not None and deduper.is_duplicate(event):
@@ -173,7 +227,7 @@ def run_blocking(iface: str, handler, duration: float | None = None) -> None:
     ``duration=None`` means until KeyboardInterrupt.
     """
     def callback(pkt):
-        event = packet_to_query(pkt)
+        event = packet_to_query(pkt, iface)
         if event is not None:
             handler(event)
 
