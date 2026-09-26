@@ -385,7 +385,39 @@ class DomainSinkhole:
             self._write_entry(base)
             self._expires.setdefault(base, expiry)
             self._sunk[base] = expiry
+        self._flush_resolver_cache()
         return True
+
+    # -- DNS-cache hygiene -------------------------------------------------
+    _last_flush = 0.0
+
+    def _flush_resolver_cache(self) -> None:
+        """Best-effort resolver-cache flush after a hosts-file change.
+
+        Editing /etc/hosts does not synchronously invalidate every local
+        resolver: systemd-resolved caches host lookups, and dnsmasq (from
+        NetworkManager) caches longer still. Blocklist managers (Pi-hole,
+        AdGuard Home) flush caches explicitly after every list change for
+        exactly this reason — without it a fresh sink can appear ineffective
+        on a domain the user visited seconds ago. Throttled to one attempt
+        per 5s; failures are swallowed (the TTL reaper still applies).
+        """
+        import time as _time
+
+        now = _time.monotonic()
+        if now - DomainSinkhole._last_flush < 5.0:
+            return
+        DomainSinkhole._last_flush = now
+        if platform.system() != "Linux":
+            return
+        for argv in (("resolvectl", "flush-caches"),
+                     ("systemd-resolve", "--flush-caches")):
+            try:
+                result = subprocess.run(argv, capture_output=True, timeout=5)
+                if result.returncode == 0:
+                    break
+            except Exception:  # noqa: BLE001 — hygiene is best effort
+                continue
 
     # -- public API -------------------------------------------------------
     def block_domain(self, qname: str, timestamp: float = 0.0) -> bool:

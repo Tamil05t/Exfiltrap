@@ -138,6 +138,29 @@ class ExfilTrapPipeline:
             reasons.append(
                 f"NXDOMAIN-heavy zone: {n} answers, {ratio:.0%} refused")
 
+        hex_n = self.tracker.domain_hex_cluster(q.src_ip, q.qname)
+        if hex_n >= config.HEX_CLUSTER_MIN:
+            from exfiltrap import reputation as _rep
+            from exfiltrap.features import base_domain as _bd
+
+            if not _rep.is_popular(_bd(q.qname)):
+                floor("MEDIUM")
+                reasons.append(
+                    f"hex-labeled A-query cluster ({hex_n} in 60s) —"
+                    " Cobalt Strike / DET-style stage1 beaconing")
+
+        churn, n2 = self.tracker.domain_label_churn(q.src_ip, q.qname)
+        if (n2 >= config.LABEL_CHURN_MIN_SAMPLES
+                and churn >= config.LABEL_CHURN_RATIO):
+            from exfiltrap import reputation as _rep
+            from exfiltrap.features import base_domain as _bd
+
+            if not _rep.is_popular(_bd(q.qname)):
+                floor("MEDIUM")
+                reasons.append(
+                    f"label churn {churn:.0%} over {n2} queries —"
+                    " cache-miss signature (labels never repeat)")
+
         if self._is_doh_bootstrap(q.qname):
             reasons.append(
                 "encrypted-DNS bootstrap seen: queries inside that DoH"

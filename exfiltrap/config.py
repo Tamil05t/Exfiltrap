@@ -65,6 +65,19 @@ DOMAIN_BEACON_MIN_INTERVAL = 5.0
 # high-entropy, which fast benign keepalives (empty/short labels) are not.
 DOMAIN_BEACON_FAST_INTERVAL = 3.0
 DOMAIN_BEACON_FAST_MIN_ENTROPY = 3.0
+# Hard ceiling on the per-domain window (flood safety valve — the window
+# is 2h by design, but a sustained unique-label flood must never grow it
+# without bound).
+DOMAIN_WINDOW_HARD_CAP = 8192
+# Cobalt Strike / DET-style stage1: plain hex labels over record type A,
+# clustered on one base domain. DET-style exfil uses this to dodge
+# TXT/NULL detectors. Popular CDN hash paths are exempt (reputation).
+HEX_CLUSTER_MIN = 3
+# Cache-miss signature: labels under one base domain that almost never
+# repeat across the session window (slow lexical tunnels spaced beyond
+# the 60s velocity window). Skipped at the window hard cap.
+LABEL_CHURN_MIN_SAMPLES = 30
+LABEL_CHURN_RATIO = 0.92
 # ASSUMPTION: intervals below this CV count as machine-periodic. 0.25 sits
 # far below Poisson noise and above realistic timer jitter.
 BEACON_MAX_CV = 0.25

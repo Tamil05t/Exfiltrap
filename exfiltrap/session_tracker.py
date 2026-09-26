@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from exfiltrap import config
 from exfiltrap.baseline_engine import BaselineEngine
-from exfiltrap.features import base_domain
+from exfiltrap.features import base_domain, leftmost_label
 
 
 @dataclass
@@ -94,11 +94,14 @@ class SessionTracker:
         self._resp_sessions: dict[str, deque[tuple[float, float]]] = {}
         self._resp_cum: dict[str, float] = {}
         # Domain-level tracking: (src, base_domain) -> (ts, qtype, entropy,
-        # label) tuples. The per-source session mixes attack + legitimate
-        # traffic on a real host (defeating mass/timing per source), but
-        # the DOMAIN view isolates the tunnel: one base domain receiving
-        # many DISTINCT high-entropy labels at machine-regular intervals,
-        # or a tunnel-grade record-type mix (NULL/PRIVATE/TXT-heavy).
+        # label_hash, hex_label) tuples. The per-source session mixes attack
+        # + legitimate traffic on a real host (defeating mass/timing per
+        # source), but the DOMAIN view isolates the tunnel: one base domain
+        # receiving many DISTINCT high-entropy labels at machine-regular
+        # intervals, or a tunnel-grade record-type mix. Labels are hashed
+        # (32-bit) rather than stored: a sustained unique-label flood used
+        # to grow these windows 4x in memory (string per tuple) with no
+        # ceiling — the hard cap below is the safety valve.
         self._domain_times: dict[tuple[str, str], deque] = {}
         # (src, base_domain) -> (ts, rcode): NXDOMAIN-ratio signal — an
         # attacker's fake zone refuses everything while the client pumps
@@ -168,8 +171,10 @@ class SessionTracker:
         domain_beacon = False
         qtype_mix = False
         if qname:
-            from exfiltrap.features import leftmost_label
-
+            label = leftmost_label(qname).lower()
+            label_h = hash(label) & 0xFFFFFFFF
+            hex_label = (len(label) >= 8 and len(label) <= 32
+                         and all(c in "0123456789abcdef" for c in label))
             bd = base_domain(qname)
             dq2 = self._domain_times.setdefault((src_ip, bd), deque())
             # keep the full session window: velocity counts the last 60s,
@@ -177,11 +182,14 @@ class SessionTracker:
             cutoff = timestamp - self.window_seconds
             while dq2 and dq2[0][0] <= cutoff:
                 dq2.popleft()
-            dq2.append((timestamp, qtype, entropy,
-                        leftmost_label(qname).lower()))
-            recent = [t for (t, _q, _e, _l) in dq2
+            dq2.append((timestamp, qtype, entropy, label_h, hex_label))
+            # flood safety valve: even a 2h window must not grow without
+            # bound under a sustained unique-label flood
+            while len(dq2) > config.DOMAIN_WINDOW_HARD_CAP:
+                dq2.popleft()
+            recent = [t for (t, _q, _e, _h, _x) in dq2
                       if t > timestamp - config.DOMAIN_VELOCITY_WINDOW]
-            recent_full = [(t, q, e, l) for (t, q, e, l) in dq2
+            recent_full = [(t, q, e, h, x) for (t, q, e, h, x) in dq2
                            if t > timestamp - config.DOMAIN_VELOCITY_WINDOW]
             # entropy path: many high-entropy labels in a short window
             if (len(recent) >= config.DOMAIN_VELOCITY_COUNT
@@ -192,7 +200,7 @@ class SessionTracker:
             # when entropy is masked by lexical/phonotactic encoding.
             if (not velocity_flag
                     and len(recent) >= config.DOMAIN_VELOCITY_UNIQUE_LABELS
-                    and len({l for (_t, _q, _e, l) in recent_full})
+                    and len({h for (_t, _q, _e, h, _x) in recent_full})
                     >= config.DOMAIN_VELOCITY_UNIQUE_LABELS):
                 from exfiltrap import reputation as _rep
 
@@ -202,14 +210,14 @@ class SessionTracker:
             # iodine -> NULL/PRIVATE): a base domain whose recent queries
             # are dominated by tunnel-favored types. Per-domain RATIO —
             # never per-query (legit TXT carries SPF/DKIM/ACME).
-            favored = [q for (_t, q, _e, _l) in recent_full
+            favored = [q for (_t, q, _e, _h, _x) in recent_full
                        if q in config.QTYPE_TUNNEL_GRADE
                        or q in config.QTYPE_TUNNEL_FAVORED]
             if (len(recent_full) >= config.QTYPE_MIX_MIN_SAMPLES
                     and len(favored) / len(recent_full) >= config.QTYPE_MIX_RATIO):
                 qtype_mix = True
             if len(dq2) >= config.DOMAIN_BEACON_MIN_QUERIES:
-                times = [t for (t, _q, _e, _l) in dq2]
+                times = [t for (t, _q, _e, _h, _x) in dq2]
                 gaps = [b2 - a2 for a2, b2 in zip(times, times[1:])]
                 # Judge regularity on the TRAILING gaps only: over a 2 h
                 # window the gap series of an ongoing periodic beacon is
@@ -220,7 +228,7 @@ class SessionTracker:
                 # detection. The last MIN_QUERIES-1 gaps are exactly the
                 # current machine-periodic run.
                 tail = gaps[-(config.DOMAIN_BEACON_MIN_QUERIES - 1):]
-                tail_ent = [e for (_t, _q, e, _l) in dq2][
+                tail_ent = [e for (_t, _q, e, _h, _x) in dq2][
                     -(config.DOMAIN_BEACON_MIN_QUERIES - 1):]
                 if len(tail) >= 2:
                     mean_gap = statistics.fmean(tail)
@@ -349,6 +357,44 @@ class SessionTracker:
                 return (0.0, 0)
             nx = sum(1 for _t, rc in dq3 if rc == 3)
             return (nx / len(dq3), len(dq3))
+
+    def domain_hex_cluster(self, src_ip: str, qname: str) -> int:
+        """Hex-labeled A queries to this base domain in the 60s window.
+
+        Cobalt Strike's stage1 and DET exfiltrate as plain hex labels over
+        record type A — deliberately boring qtypes to dodge TXT/NULL
+        detectors (DetExt trains on exactly this mode of iodine).
+        """
+        from exfiltrap.features import base_domain as _bd
+
+        now = self._last_timestamp_of(src_ip, qname)
+        with self._lock:
+            dq2 = self._domain_times.get((src_ip, _bd(qname)))
+            if not dq2:
+                return 0
+            cutoff = now - config.DOMAIN_VELOCITY_WINDOW
+            return sum(1 for (t, q, _e, _h, x) in dq2
+                       if t > cutoff and x and q == 1)
+
+    def domain_label_churn(self, src_ip: str, qname: str) -> tuple[float, int]:
+        """(distinct-label share, samples) over the retained session window.
+
+        The cache-miss signature: a tunnel's labels never repeat, benign
+        domains' do. Skewed toward 1.0 when the window is at its cap
+        (retained data is all-recent), so callers skip that case.
+        """
+        from exfiltrap.features import base_domain as _bd
+
+        with self._lock:
+            dq2 = self._domain_times.get((src_ip, _bd(qname)))
+            if not dq2 or len(dq2) >= config.DOMAIN_WINDOW_HARD_CAP:
+                return (0.0, 0)
+            return (len({h for (_t, _q, _e, h, _x) in dq2}) / len(dq2),
+                    len(dq2))
+
+    def _last_timestamp_of(self, src_ip: str, qname: str) -> float:
+        dq = self._sessions.get(src_ip)
+        return dq[-1][0] if dq else 0.0
 
     def snapshot(self) -> dict[str, SessionState]:
         with self._lock:
