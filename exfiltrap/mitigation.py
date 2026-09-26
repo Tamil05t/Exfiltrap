@@ -357,7 +357,12 @@ class DomainSinkhole:
 
     # -- hosts-file plumbing ------------------------------------------------
     def _write_entry(self, qname: str, expiry: float) -> None:
-        with open(self.hosts_path, "r+", encoding="utf-8", errors="replace") as fh:
+        # "a+" creates the file when missing (a private EXFILTRAP_HOSTS_FILE
+        # may not pre-exist) — "r+" turned a missing file into a SILENT total
+        # response failure, found by the 1h soak: in-memory convictions kept
+        # reporting hits while nothing was ever written to disk.
+        with open(self.hosts_path, "a+", encoding="utf-8", errors="replace") as fh:
+            fh.seek(0)
             have = [ln for ln in fh.readlines()
                     if self.MARKER in ln and f" {qname} " in f" {ln.strip()} "]
             pending = []

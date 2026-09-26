@@ -72,8 +72,14 @@ class PolicyMitigation:
         if self.sinkhole is not None and src not in self.allowlist:
             try:
                 domain_response = bool(self.sinkhole.notify(assessment))
-            except Exception:
-                pass  # sinkhole failure must not block source response
+            except Exception as exc:  # noqa: BLE001 — never blocks detection,
+                # but a response that silently never lands is an outage the
+                # operator cannot see (soak finding: missing hosts file).
+                import logging
+
+                logging.getLogger("exfiltrap.policy").error(
+                    "sinkhole response FAILED for %s: %s",
+                    assessment.qname, exc)
 
         if own:
             # Single-host deployment: the "attacker" is this machine.
