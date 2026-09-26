@@ -7,6 +7,20 @@ metadata the stateful modules need:
 * total domain length
 * subdomain (label) count
 * 60-second query frequency for the same base domain
+
+v2.0 adds the two character-pattern features the peer detectors found to
+carry the most signal beyond entropy, computed against a reference built
+from the shipped Tranco corpus (real DNS-domain statistics, offline):
+
+* n-gram deviation — share of the leftmost label's trigrams that are NOT
+  attested in real domain behavior. Encoded/random payloads trigram
+  differently from every legitimate domain; lexical (word-based) tunnels
+  that defeat entropy land here instead.
+* digit ratio — digit characters over label length. Encoded payloads
+  carry digits at rates real names never do.
+
+FEATURE_ORDER is the single source of truth for the classifier's column
+order — training, inference and the batched live path all read it.
 """
 
 from __future__ import annotations
@@ -16,6 +30,13 @@ from collections import Counter, deque
 from dataclasses import dataclass
 
 from exfiltrap import config
+
+# Canonical column order for the classifier (v2.0). The first four are the
+# base paper's features, kept first so v1 vs v2 comparisons stay aligned.
+FEATURE_ORDER = ("entropy", "length", "subdomain_count", "frequency",
+                 "ngram_deviation", "digit_ratio")
+
+_NGRAM_N = 3
 
 
 def shannon_entropy(s: str) -> float:
@@ -65,14 +86,78 @@ class FeatureVector:
     base_domain: str
     qname: str
     timestamp: float
+    ngram_deviation: float = 0.0
+    digit_ratio: float = 0.0
+
+    def row(self) -> list[float]:
+        """Feature values in canonical FEATURE_ORDER (classifier columns)."""
+        return [float(self.entropy), float(self.length),
+                float(self.subdomain_count), float(self.frequency),
+                float(self.ngram_deviation), float(self.digit_ratio)]
 
 
 class FeatureExtractor:
-    """Stateful extractor that also tracks 60s per-base-domain frequency."""
+    """Stateful extractor that also tracks 60s per-base-domain frequency.
+
+    The trigram reference (real-domain letter statistics) is built lazily
+    from the Tranco corpus on first use and cached for the process —
+    training and live inference share the exact same reference, and a
+    missing corpus degrades BOTH paths to the same fallback set.
+    """
+
+    _reference: frozenset[str] | None = None
 
     def __init__(self, frequency_window: float = config.FREQUENCY_WINDOW_SECONDS):
         self.frequency_window = frequency_window
         self._domains: dict[str, deque[float]] = {}
+
+    # -- trigram reference --------------------------------------------------
+    @classmethod
+    def _trigram_reference(cls) -> frozenset[str]:
+        if cls._reference is not None:
+            return cls._reference
+        counts: Counter[str] = Counter()
+        try:
+            import csv as _csv
+
+            with open(config.TRANCO_CSV, newline="", encoding="utf-8",
+                      errors="replace") as fh:
+                for row in _csv.reader(fh):
+                    if len(row) < 2 or not row[1].strip():
+                        continue
+                    domain = row[1].strip().lower()
+                    for i in range(len(domain) - _NGRAM_N + 1):
+                        counts[domain[i:i + _NGRAM_N]] += 1
+        except OSError:
+            pass
+        if counts:
+            common = frozenset(g for g, c in counts.items()
+                               if c >= config.NGRAM_MIN_CORPUS_COUNT)
+        else:
+            common = frozenset(config.NGRAM_FALLBACK_COMMON)
+        cls._reference = common
+        return common
+
+    def _ngram_deviation(self, label: str) -> float:
+        """Share of the label's trigrams missing from real-domain behavior.
+
+        Applies to the lowercased LEFTMOST label — the payload carrier —
+        consistently with the entropy feature. [0, 1]; 0.0 for labels too
+        short to form a trigram.
+        """
+        clean = "".join(c for c in label.lower() if c.isalnum())
+        grams = [clean[i:i + _NGRAM_N]
+                 for i in range(len(clean) - _NGRAM_N + 1)]
+        if not grams:
+            return 0.0
+        common = self._trigram_reference()
+        return sum(1 for g in grams if g not in common) / len(grams)
+
+    @staticmethod
+    def _digit_ratio(label: str) -> float:
+        if not label:
+            return 0.0
+        return sum(c.isdigit() for c in label) / len(label)
 
     def extract(self, qname: str, timestamp: float) -> FeatureVector:
         clean = _strip_trailing_dot(qname)
@@ -92,6 +177,8 @@ class FeatureExtractor:
             base_domain=domain,
             qname=qname,
             timestamp=timestamp,
+            ngram_deviation=self._ngram_deviation(label),
+            digit_ratio=self._digit_ratio(label),
         )
 
     def _bump_frequency(self, domain: str, timestamp: float) -> float:
@@ -120,6 +207,8 @@ def extract_static(qname: str) -> FeatureVector:
         frequency=0.0,
         leftmost_label=vec.leftmost_label,
         base_domain=vec.base_domain,
-        qname=qname,
+        qname=vec.qname,
         timestamp=0.0,
+        ngram_deviation=vec.ngram_deviation,
+        digit_ratio=vec.digit_ratio,
     )

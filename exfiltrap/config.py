@@ -17,6 +17,21 @@ import pathlib
 # paper's short-window feature, kept for fair comparison).
 FREQUENCY_WINDOW_SECONDS = 60.0
 
+# v2.0 character-pattern features (the peer detectors' best extras, made
+# stronger: the reference is the shipped 50k-domain Tranco corpus rather
+# than a hand-picked trigram list).
+# A trigram is "common" when it appears at least this many times across
+# the corpus domains — solidly attested DNS-domain letter behavior.
+NGRAM_MIN_CORPUS_COUNT = 3
+# Fallback reference when the Tranco CSV is absent (train AND inference
+# must fall back identically so the model sees the same semantics).
+NGRAM_FALLBACK_COMMON = (
+    "the", "and", "ing", "ion", "ent", "com", "net", "www", "api", "app",
+    "goo", "oog", "ogl", "gle", "fac", "ace", "book", "mic", "ros", "oso",
+    "ama", "maz", "zon", "clo", "lou", "oud", "app", "ple", "msn", "yah",
+    "ooo", "eb", "sta", "tat", "ati", "tic", "cal", "gov", "edu", "org",
+)
+
 # ---------------------------------------------------------------------------
 # M3 — Stateful session tracker
 # ---------------------------------------------------------------------------

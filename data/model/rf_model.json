@@ -3,22 +3,24 @@
     "entropy",
     "length",
     "subdomain_count",
-    "frequency"
+    "frequency",
+    "ngram_deviation",
+    "digit_ratio"
   ],
   "n_estimators": 100,
   "benign_rows": 20000,
   "malicious_rows": 18880,
   "holdout": {
-    "accuracy": 0.9710648148148148,
-    "precision": 0.96943115364168,
-    "recall": 0.9707213202022891,
-    "fpr": 0.02861408310525006,
-    "tp": 3647,
-    "fp": 115,
-    "tn": 3904,
-    "fn": 110
+    "accuracy": 0.9822530864197531,
+    "precision": 0.9783240814168649,
+    "recall": 0.9850944902848017,
+    "fpr": 0.02040308534461309,
+    "tp": 3701,
+    "fp": 82,
+    "tn": 3937,
+    "fn": 56
   },
   "seed": 42,
-  "trained_at": "2026-09-06T18:30:05",
+  "trained_at": "2026-09-26T10:34:03",
   "sklearn_version": "1.9.0"
 }

@@ -289,8 +289,7 @@ class ExfilTrapPipeline:
         RF probabilities are computed in one vectorized call — ~8x the
         sustained query rate of per-row scoring (17 -> ~130 q/s here)."""
         vectors = [self.extractor.extract(q.qname, q.timestamp) for q in events]
-        rows = [[v.entropy, v.length, v.subdomain_count, v.frequency]
-                for v in vectors]
+        rows = [v.row() for v in vectors]
         batch = getattr(self.classifier, "predict_proba_many", None)
         probs = (batch(rows) if batch is not None
                  else [self.classifier.predict_proba(v) for v in vectors])

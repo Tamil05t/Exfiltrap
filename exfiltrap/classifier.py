@@ -1,8 +1,11 @@
 """M5 — Random Forest classifier wrapper.
 
 Loads the joblib-persisted RandomForestClassifier produced by
-``tools/train_classifier.py`` and exposes a uniform ``predict_proba``
-over the four base-paper features.
+``tools/train_classifier.py`` and exposes a uniform ``predict_proba`` over
+the feature vector defined by ``features.FEATURE_ORDER`` (v2.0: the base
+paper's four features plus n-gram deviation and digit ratio). The model
+artifact must be trained with the same order — ``_to_row`` enforces it for
+plain sequences, and FeatureVector.row() guarantees it for live events.
 """
 
 from __future__ import annotations
@@ -12,8 +15,7 @@ from typing import Sequence
 import joblib
 
 from exfiltrap import config
-
-FEATURE_ORDER = ("entropy", "length", "subdomain_count", "frequency")
+from exfiltrap.features import FEATURE_ORDER
 
 
 class DNSClassifier:
@@ -35,17 +37,28 @@ class DNSClassifier:
         # Trained with n_jobs=-1; for streaming per-row inference the
         # thread-pool dispatch costs far more than it saves.
         model.n_jobs = 1
+        expected = len(FEATURE_ORDER)
+        actual = getattr(model, "n_features_in_", expected)
+        if actual != expected:
+            raise RuntimeError(
+                f"model at {path} was trained with {actual} features but this "
+                f"build expects {expected} ({', '.join(FEATURE_ORDER)}); "
+                "retrain with `make train` before running the engine")
         return cls(model)
 
     @staticmethod
     def _to_row(features) -> Sequence[float]:
-        """Accept a FeatureVector-like object or a plain 4-sequence."""
+        """Accept a FeatureVector-like object or a plain ordered sequence."""
+        if hasattr(features, "row"):
+            return features.row()
         if hasattr(features, "entropy"):
             return [
                 float(features.entropy),
                 float(features.length),
                 float(features.subdomain_count),
                 float(features.frequency),
+                float(getattr(features, "ngram_deviation", 0.0)),
+                float(getattr(features, "digit_ratio", 0.0)),
             ]
         row = list(features)
         if len(row) != len(FEATURE_ORDER):

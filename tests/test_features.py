@@ -107,3 +107,49 @@ class TestExtractStatic:
         assert dyn.entropy == stat.entropy
         assert dyn.length == stat.length
         assert dyn.subdomain_count == stat.subdomain_count
+
+
+class TestV2CharacterFeatures:
+    """v2.0 features: n-gram deviation (Tranco-grounded) + digit ratio."""
+
+    def test_real_word_low_deviation_random_high(self):
+        from exfiltrap.features import FeatureExtractor
+
+        fx = FeatureExtractor()
+        real = fx.extract("mail.google.com", 0.0)
+        random_lbl = fx.extract("kq7zdxp2w9n4.example", 0.0)
+        assert real.ngram_deviation <= 0.34
+        assert random_lbl.ngram_deviation >= 0.75
+
+    def test_digit_ratio(self):
+        from exfiltrap.features import FeatureExtractor
+
+        fx = FeatureExtractor()
+        clean = fx.extract("mailserver.example", 0.0)
+        digit_heavy = fx.extract("a1b2c3d4e5.example", 0.0)
+        assert clean.digit_ratio == 0.0
+        assert abs(digit_heavy.digit_ratio - 0.5) < 0.01
+
+    def test_short_labels_neutral(self):
+        from exfiltrap.features import FeatureExtractor
+
+        fx = FeatureExtractor()
+        v = fx.extract("ab.example", 0.0)
+        assert v.ngram_deviation == 0.0  # no trigram can form
+
+    def test_row_matches_feature_order(self):
+        from exfiltrap.features import FEATURE_ORDER, FeatureExtractor
+
+        fx = FeatureExtractor()
+        v = fx.extract("news.example", 0.0)
+        row = v.row()
+        assert len(row) == len(FEATURE_ORDER)
+        assert row[0] == v.entropy and row[1] == v.length
+        assert row[4] == v.ngram_deviation and row[5] == v.digit_ratio
+
+    def test_reference_built_from_corpus(self):
+        from exfiltrap.features import FeatureExtractor
+
+        ref = FeatureExtractor._trigram_reference()
+        assert len(ref) > 500  # real corpus, not the fallback set
+        assert "goo" in ref and "www" in ref

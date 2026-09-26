@@ -28,9 +28,16 @@ from sklearn.metrics import confusion_matrix
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from exfiltrap import config  # noqa: E402
-from exfiltrap.features import FeatureExtractor  # noqa: E402
+from exfiltrap.features import FEATURE_ORDER, FeatureExtractor  # noqa: E402
 
 _TOOLS = Path(__file__).resolve().parent
+
+FEATURES = list(FEATURE_ORDER)
+
+
+def _row(v) -> dict:
+    """One training row from a FeatureVector, in canonical column order."""
+    return dict(zip(FEATURES, v.row()))
 
 
 def _import_tool(name: str):
@@ -42,8 +49,6 @@ def _import_tool(name: str):
 
 benign_gen = _import_tool("benign_traffic_gen")
 attacker = _import_tool("attacker_client")
-
-FEATURES = ["entropy", "length", "subdomain_count", "frequency"]
 
 
 def synth_benign_domains(n: int, seed: int) -> list[str]:
@@ -80,9 +85,9 @@ def build_benign_rows(n: int, seed: int, benign_csv) -> list[dict]:
         )
         for rec in records[:take]:
             v = fx.extract(rec.query.qname, rec.query.timestamp)
-            rows.append({"entropy": v.entropy, "length": v.length,
-                         "subdomain_count": v.subdomain_count,
-                         "frequency": v.frequency, "label": 0})
+            row = _row(v)
+            row["label"] = 0
+            rows.append(row)
         remaining -= take
         if remaining <= 0:
             break
@@ -123,9 +128,10 @@ def text_tunnel_rows(seed: int, n: int) -> list[dict]:
         name = ".".join(chunks) + "." + config.TUNNEL_DOMAIN
         ts = float(i)
         v = fx.extract(name, ts)
-        rows.append({"entropy": v.entropy, "length": v.length,
-                     "subdomain_count": v.subdomain_count,
-                     "frequency": 1.0 + (i % 30), "label": 1})
+        row = _row(v)
+        row["frequency"] = 1.0 + (i % 30)
+        row["label"] = 1
+        rows.append(row)
         _ = n_labels, use_hex
     return rows
 
@@ -165,9 +171,9 @@ def _extract(records, step: int = 1) -> list[dict]:
     rows = []
     for rec in records[::step]:
         v = fx.extract(rec.query.qname, rec.query.timestamp)
-        rows.append({"entropy": v.entropy, "length": v.length,
-                     "subdomain_count": v.subdomain_count,
-                     "frequency": v.frequency, "label": 1})
+        row = _row(v)
+        row["label"] = 1
+        rows.append(row)
     return rows
 
 
