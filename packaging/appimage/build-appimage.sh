@@ -21,7 +21,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT_DIR="${1:-$ROOT/dist-appimage}"
 APPDIR="$OUT_DIR/AppDir"
-PY="$ROOT/.venv/bin/python"
+# repo venv when present (local builds); CI installs into system python
+if [ -n "${EXFILTRAP_PY:-}" ]; then PY="$EXFILTRAP_PY"
+elif [ -x "$ROOT/.venv/bin/python" ]; then PY="$ROOT/.venv/bin/python"
+else PY="$(command -v python3)"; fi
 
 echo "== 1/5 engine (PyInstaller onedir) =="
 cd "$ROOT"
