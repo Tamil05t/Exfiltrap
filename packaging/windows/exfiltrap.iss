@@ -37,6 +37,18 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=admin
 OutputBaseFilename=ExfilTrap-Setup
+; Write the setup .exe to <repo>\dist, NOT next to this script.
+; Without OutputDir, Inno Setup defaults to the directory containing the
+; script, so the installer landed in packaging\windows\ while everything else
+; in the repo expects dist\ExfilTrap-Setup.exe:
+;   - build_windows.bat signs and prints dist\ExfilTrap-Setup.exe
+;   - CI asserts dist/ExfilTrap-Setup.exe exists after ISCC
+;   - the upload-artifact step globs dist/*.exe
+; The old CI step hid this by ending in `|| echo "iscc skipped (optional)"`,
+; so the installer was silently never produced into dist/ and never uploaded.
+; Relative paths here resolve against the script's own directory (same base
+; the [Files] Source below already relies on), so ..\..\dist is the repo dist.
+OutputDir=..\..\dist
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
