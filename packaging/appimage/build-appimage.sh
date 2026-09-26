@@ -74,6 +74,18 @@ for helper in WebKitNetworkProcess WebKitWebProcess; do
 done
 cp "$WEBKIT_HELPER_DIR/injected-bundle/libwebkit2gtkinjectedbundle.so" \
    "$APPDIR/usr/lib/$MULTIARCH/webkit2gtk-4.1/injected-bundle/"
+# Tray-icon stack: tauri dlopen()s libayatana-appindicator3 at RUNTIME
+# (invisible to linuxdeploy's linked-deps walk). Without bundling it, a
+# host that HAS appindicator loads its copy against the bundle's older
+# glib -> "undefined symbol: g_once_init_leave_pointer" crash. Bundle the
+# whole chain from the build machine so it always matches the bundled
+# glib. Missing libs on exotic runners are non-fatal (tray only).
+for lib in libayatana-appindicator3.so.1 libayatana-ido3-0.4.so.0 \
+           libayatana-indicator3.so.7 libdbusmenu-glib.so.4 \
+           libdbusmenu-gtk3.so.4; do
+  src="/usr/lib/$MULTIARCH/$lib"
+  [ -e "$src" ] && cp -L "$src" "$APPDIR/usr/lib/$MULTIARCH/" || true
+done
 # desktop + icon
 cp "$ROOT/packaging/arch/ex-fil-trap.desktop" \
    "$APPDIR/usr/share/applications/ex-fil-trap.desktop"
