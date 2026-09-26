@@ -33,6 +33,14 @@ a = Analysis(
         "sklearn.ensemble", "sklearn.ensemble._forest",
         "sklearn.tree", "sklearn.tree._classes", "sklearn.tree._utils",
         "sklearn.utils._weight_vector", "sklearn.utils._seq_dataset",
+        # scipy 1.18 lazy submodules the pickle import graph touches at
+        # model-load time (missing -> "dependencies are missing" at start)
+        "scipy._external.array_api_compat.numpy",
+        "scipy._external.array_api_compat.numpy.fft",
+        "scipy.fft",
+        "scipy.integrate",
+        "scipy.linalg",
+        "scipy.sparse",
         "exfiltrap.service",
         "exfiltrap.winservice",
         "exfiltrap.dashboard.app",

@@ -349,7 +349,7 @@
         <div class="kpis four">
           <div class="kpi purple"><div class="val" id="r-sinks">0</div><div class="lbl">Active domain sinks</div></div>
           <div class="kpi red"><div class="val" id="r-intercepts">0</div><div class="lbl">Intercepted attempts</div></div>
-          <div class="kpi amber"><div class="val" id="r-deferred">–</div><div class="lbl">Response policy</div></div>
+          <div class="kpi amber"><div class="val" id="r-deferred">–</div><div class="lbl" id="r-deferred-lbl">Response policy</div></div>
           <div class="kpi green"><div class="val" id="r-drops">0</div><div class="lbl">Source firewall drops</div></div>
         </div>
         <div class="panel" style="margin-bottom:14px">
@@ -441,7 +441,7 @@
       <span class="t-item">last alert <b id="tick-alert">none</b></span>
       <span class="t-item">sinkhole <b id="tick-sink">–</b></span>
       <span class="spacer"></span>
-      <span class="t-item" id="tick-note">ExfilTrap console</span>
+      <span class="t-item" id="tick-note">ExfilTrap v2.0 console</span>
     </footer>
   </div>
 </div>
@@ -569,6 +569,12 @@ function signalsHtml(e) {
   if (/beacon/i.test(r)) out.push('<span class="flag beacon">BEACON</span>');
   if (/slow-drip/i.test(r)) out.push('<span class="flag mass">MASS</span>');
   if (/response channel/i.test(r)) out.push('<span class="flag resp">RESP</span>');
+  if (/hex-labeled/i.test(r)) out.push('<span class="tag src">HEX-A</span>');
+  if (/label churn/i.test(r)) out.push('<span class="tag src">CHURN</span>');
+  if (/case encoding/i.test(r)) out.push('<span class="tag canary">0x20</span>');
+  if (/qdcount|opcode|reserved header/i.test(r))
+    out.push('<span class="tag bypass">HDR</span>');
+  if (/INVISIBLE/i.test(r)) out.push('<span class="tag bypass">DoH</span>');
   if (e.mitre) e.mitre.split(",").filter(Boolean).forEach(
       (t) => out.push(`<span class="tag mitre">${esc(t)}</span>`));
   if (e.confirmed && !/canary/i.test(r)) out.push('<span class="tag sink">DECODED</span>');
@@ -726,6 +732,14 @@ function loadSinkholeIntoStatus(s) {
   const doms = s.sinkhole_domains;
   if (doms) { $("r-sinks").textContent = doms.length; $("tick-sink").textContent =
       `${doms.length} domain${doms.length === 1 ? "" : "s"}`; }
+  const pol = s.policy || {};
+  const el = $("r-deferred");
+  if (el) {
+    el.textContent = pol.sinkhole ? "SINK" : "ALERT";
+    $("r-deferred-lbl").textContent = pol.sinkhole
+        ? `Sinkhole armed · ${pol.sinkhole_strikes} strike(s)`
+        : "Alert-only (--sinkhole off)";
+  }
 }
 
 async function loadQueries() {
