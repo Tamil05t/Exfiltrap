@@ -33,6 +33,12 @@ ENGINE_DIR="$ROOT/dist/exfiltrap"
 test -x "$ENGINE_DIR/exfiltrap"
 
 echo "== 2/5 desktop shell (cargo release) =="
+# tauri-build VALIDATES the resources paths in tauri.conf.json at compile
+# time — the engine must be staged into resources/ before cargo runs
+# (the same thing every other packaging job does).
+mkdir -p "$ROOT/desktop/src-tauri/resources"
+rm -rf "$ROOT/desktop/src-tauri/resources/exfiltrap-engine"
+cp -r "$ENGINE_DIR" "$ROOT/desktop/src-tauri/resources/exfiltrap-engine"
 # Root-free builds: a local extracted -dev prefix (see gtk-dev/env.sh)
 # supplies the headers/pkg-config files when system -dev packages are not
 # installed. On CI runners the system packages win and this is a no-op.
