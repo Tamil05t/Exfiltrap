@@ -46,10 +46,26 @@ jobs:
         run: |
           # The frozen engine must carry the dashboard templates, and the
           # console must expose the new UI shell (view-overview + SSE).
-          $idx = Get-ChildItem dist\exfiltrap -Recurse -Filter index.html |
-                 Where-Object { $_.FullName -match 'dashboard/templates' } |
-                 Select-Object -First 1
-          if (-not $idx) { throw "dashboard index.html missing from bundle" }
+          #
+          # $_.FullName is BACKSLASH-separated on Windows, so the path filter
+          # must be separator-agnostic. A forward-slash-only pattern
+          # ('dashboard/templates') never matched: $idx came back $null on
+          # every run and the step died on a bogus "index.html missing from
+          # bundle" while the templates were in fact present. Normalise the
+          # separators before matching instead of fighting regex escaping
+          # inside a YAML block scalar. The failure message now dumps the
+          # index.html files that WERE found, so a real packaging regression
+          # can never again be masked by a bad pattern.
+          $hits = @(Get-ChildItem dist\exfiltrap -Recurse -Filter index.html)
+          $idx  = $hits |
+                  Where-Object { $_.FullName.Replace('\','/') -match 'dashboard/templates' } |
+                  Select-Object -First 1
+          if (-not $idx) {
+            $seen = if ($hits.Count) {
+              ($hits | ForEach-Object { $_.FullName }) -join '; '
+            } else { '<no index.html anywhere under dist\exfiltrap>' }
+            throw "dashboard index.html missing from bundle (found: $seen)"
+          }
           $html = Get-Content -Raw $idx.FullName
           foreach ($needle in @('ExfilTrap','view-overview','api/stream')) {
             if ($html -notmatch [regex]::Escape($needle)) {
