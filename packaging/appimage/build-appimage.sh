@@ -20,6 +20,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT_DIR="${1:-$ROOT/dist-appimage}"
+mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"   # CI passes relative args; cd breaks them
 APPDIR="$OUT_DIR/AppDir"
 # repo venv when present (local builds); CI installs into system python
 if [ -n "${EXFILTRAP_PY:-}" ]; then PY="$EXFILTRAP_PY"
