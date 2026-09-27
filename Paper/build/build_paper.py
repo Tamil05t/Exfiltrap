@@ -261,14 +261,14 @@ run(i1, "The Domain Name System (DNS) is one of the very few protocols that must
         "adversary can encode arbitrary binary payload into sequences of subdomain "
         "labels beneath a domain under their control, and the recursive resolver "
         "dutifully forwards that encoded payload towards the malicious authoritative "
-        "server [2]. DNS tunneling is therefore used both to exfiltrate sensitive "
+        "server [1]. DNS tunneling is therefore used both to exfiltrate sensitive "
         "data and to maintain command-and-control connectivity inside traffic that "
         "is, at the packet level, indistinguishable from ordinary name resolution "
-        "[13]. Because the channel rides on a protocol that perimeter policy almost "
+        "[2]. Because the channel rides on a protocol that perimeter policy almost "
         "never blocks, tunnel-based exfiltration bypasses proxy logs, data-loss "
         "prevention gateways and most traditional perimeter controls, and ordinary "
         "resolver logging records the queried names without revealing the encoded "
-        "content they carry [5].", size=12)
+        "content they carry [3].", size=12)
 
 i2 = doc.add_paragraph()
 i2.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
@@ -280,18 +280,18 @@ run(i2, "Recent studies show that machine-learning-based DNS tunneling detectors
         "payload entropy, domain length, subdomain count and query repetition "
         "frequency; the base paper of this work reports 95.33% accuracy, 95.89% "
         "precision and 94.59% recall with a 3.95% false-positive rate using exactly "
-        "this per-query architecture [2], while comparable supervised and hybrid "
+        "this per-query architecture [1], while comparable supervised and hybrid "
         "detectors report 88% to 98% detection on conventional tunneling workloads "
-        "[8], [30]. However, these architectures share a structural weakness: an "
+        "[4], [5]. However, these architectures share a structural weakness: an "
         "adversary who splits a document into very small chunks, encrypts them, "
         "paces a single query every 65 seconds and randomizes the queried domains "
         "produces queries whose individual features lie entirely inside the "
-        "distribution of benign hash-label hostnames [26]. Under such a slow-drip "
+        "distribution of benign hash-label hostnames [6]. Under such a slow-drip "
         "strategy the per-query evidence for every packet is genuinely benign, and "
         "only the accumulated behaviour of the session betrays the tunnel; prior "
         "work has confirmed that low-throughput and randomized DNS activity can "
         "emulate legitimate traffic well enough to defeat feature-based "
-        "classification entirely [5], [55].", size=12)
+        "classification entirely [3], [7].", size=12)
 
 i3 = doc.add_paragraph()
 i3.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
@@ -302,16 +302,16 @@ run(i3, "The proposed ExFilTrap framework has important applications in enterpri
         "statistical profiling of resolver sessions allows an organisation to "
         "detect exfiltration attempts that would otherwise require manual forensic "
         "review of DNS logs, and automated mitigation shortens the interval between "
-        "detection and containment from hours to seconds [45]. In regulated "
+        "detection and containment from hours to seconds [8]. In regulated "
         "environments where DNS must remain open, a detector that reports decoded "
         "payload evidence rather than a bare alert materially improves incident "
         "response, because the analyst receives the reconstructed content rather "
-        "than a suspicion [51]. The same session statistics also support "
+        "than a suspicion [9]. The same session statistics also support "
         "security operations at scale: because the stateful layer carries negligible "
         "per-query cost, the framework can run as an unattended service on the "
-        "resolver host or on a commodity monitoring node [44], and the privilege-"
+        "resolver host or on a commodity monitoring node [10], and the privilege-"
         "separated design allows it to operate under two narrowly scoped Linux "
-        "capabilities rather than as a fully privileged process [4].", size=12)
+        "capabilities rather than as a fully privileged process [11].", size=12)
 doc.add_paragraph()
 
 # ============================================================= RELATED WORKS
@@ -345,7 +345,7 @@ r2 = doc.add_paragraph()
 r2.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 r2.paragraph_format.line_spacing = 1.15
 r2.paragraph_format.first_line_indent = Inches(0.25)
-run(r2, "The base paper by Sujitha et al. [2] proposed a real-time DNS tunneling "
+run(r2, "The base paper by Sujitha et al. [1] proposed a real-time DNS tunneling "
         "detection and prevention framework using statistical feature analysis and "
         "a Random Forest classifier over domain length, subdomain count and Shannon "
         "entropy, together with automated firewall rules, and reported 95.33% "
@@ -354,37 +354,37 @@ run(r2, "The base paper by Sujitha et al. [2] proposed a real-time DNS tunneling
         "establishes the reference architecture that ExFilTrap adopts and extends, "
         "but each query is still classified in isolation. Per-query Random Forest "
         "detection of this kind is widely reproduced: ensemble and hybrid variants "
-        "report 92% to 98% accuracy on standard tunneling datasets [39], [44], and "
+        "report 92% to 98% accuracy on standard tunneling datasets [12], [10], and "
         "feature-fusion approaches that combine encoding features with behavioural "
-        "features improve detection further [46]. Entropy-only detectors achieve "
+        "features improve detection further [13]. Entropy-only detectors achieve "
         "85% to 92% detection on high-entropy Base32 tunnels but collapse to below "
         "40% on Hex-encoded or encrypted payloads, because a sixteen-symbol alphabet "
-        "systematically lowers per-label entropy [16], [20]. Statistical outlier "
+        "systematically lowers per-label entropy [14], [15]. Statistical outlier "
         "methods over query volumes detect volumetric tunneling at 88% to 93% but "
         "cannot observe drip strategies that hold per-window volume near the "
-        "baseline [28], and dedicated low-throughput studies confirm that "
+        "baseline [16], and dedicated low-throughput studies confirm that "
         "exfiltration below a few queries per minute is the hardest regime for "
-        "volume-based analysis [55], [5]. Deep sequence models, including temporal "
+        "volume-based analysis [7], [3]. Deep sequence models, including temporal "
         "convolutional networks, hybrid bidirectional transformers and "
-        "attention-based architectures, report 96% to 98% accuracy [22], [54], [52], "
+        "attention-based architectures, report 96% to 98% accuracy [17], [18], [19], "
         "yet they require large labelled corpora, retraining pipelines and "
         "accelerator resources, and remain vulnerable to the same per-query evasion "
-        "once label statistics are matched to the benign distribution [26], [70]. "
+        "once label statistics are matched to the benign distribution [6], [20]. "
         "Beacon-detection systems in the HTTP domain achieve 90% to 95% precision "
-        "on periodic command-and-control callbacks [13], and behavioural "
+        "on periodic command-and-control callbacks [2], and behavioural "
         "fingerprinting has been proposed for covert DNS activity in enterprise "
-        "networks [38]; porting this timing idea to DNS is one of the contributions "
+        "networks [21]; porting this timing idea to DNS is one of the contributions "
         "of the proposed system. Sequential hypothesis testing over network flows "
         "has previously been applied to port-scan detection with strong statistical "
         "guarantees, but has not been combined with entropy-weighted DNS payload "
         "mass. Finally, existing mitigation implementations are typically one-way, "
         "so a single false positive becomes a prolonged outage; policy-based "
         "enforcement with time-to-live and allowlists is proposed here to make "
-        "automated response operationally safe [45], [51]. Taken together, the "
+        "automated response operationally safe [8], [9]. Taken together, the "
         "literature establishes that behavioural and ensemble methods improve "
-        "robustness [48], [15], [25], that explainability and rule-based "
-        "confirmation are valuable for analyst trust [20], and that scalable "
-        "deployment on programmable hardware is feasible [44], [72]; the research "
+        "robustness [22], [23], [24], that explainability and rule-based "
+        "confirmation are valuable for analyst trust [15], and that scalable "
+        "deployment on programmable hardware is feasible [10], [25]; the research "
         "gap addressed here is the absence of a system that combines a long-window "
         "statistical profile of a session with payload confirmation and reversible "
         "automated mitigation, evaluated specifically against an adversary built to "
@@ -400,7 +400,7 @@ r3.paragraph_format.line_spacing = 1.15
 r3.paragraph_format.first_line_indent = Inches(0.25)
 run(r3, "Most current DNS tunneling detectors classify each query in isolation, "
         "evaluate on loud tunneling workloads and stop at detection without closing "
-        "the response loop [2], [30]. They overlook the slow-drip adversary whose "
+        "the response loop [1], [5]. They overlook the slow-drip adversary whose "
         "every individual query is statistically benign, and they rarely report the "
         "operational behaviour \u2014 resource footprint, false-positive handling and "
         "deployment privilege model \u2014 that determines whether a detector can "
@@ -440,7 +440,7 @@ run(mm1, "This experiment was conducted on an Ubuntu Linux host (kernel 6.x, "
          "traffic corpus is the top 50,000 real-world domains from the Tranco "
          "top-sites sample, sent as jittered Poisson arrivals at one query per second, "
          "so that the detector learns from realistic resolver behaviour rather than "
-         "synthetic name lists [1]. Attack traffic is generated by the project's own "
+         "synthetic name lists [26]. Attack traffic is generated by the project's own "
          "client, which implements both a loud fast tunnel and a stealth-hardened "
          "slow drip that encrypts its payload, sizes its hex labels into the benign "
          "hash-hostname band, paces one query every 65 seconds and uses corpus-length "
@@ -461,7 +461,7 @@ g1.paragraph_format.line_spacing = 1.15
 run(g1, "Group 1", size=12, bold=True)
 run(g1, " ", size=12)
 run(g1, "The existing method is a per-query Random Forest detector in the style of "
-        "the base paper [2]: each DNS query is independently classified as malicious "
+        "the base paper [1]: each DNS query is independently classified as malicious "
         "or legitimate from six features \u2014 Shannon entropy of the leftmost "
         "label, full domain length, subdomain count, query frequency for the base "
         "domain inside a 60-second window, n-gram deviation and digit ratio \u2014 "
@@ -472,7 +472,7 @@ run(g1, "The existing method is a per-query Random Forest detector in the style 
         "reliability against adversaries that keep each individual query benign, and "
         "the resulting recall collapse is quantified in the results. This "
         "configuration is reproduced from the feature set and evaluation protocol "
-        "described in the reference literature [2], [8].", size=12)
+        "described in the reference literature [1], [4].", size=12)
 doc.add_paragraph()
 
 g2 = doc.add_paragraph()
@@ -539,7 +539,7 @@ sa.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 sa.paragraph_format.line_spacing = 1.15
 run(sa, "The statistical analysis was carried out using Python 3.12 with the NumPy "
         "and SciPy statistical libraries, which provide the same descriptive and "
-        "inferential procedures used in dedicated statistical packages [3]. The "
+        "inferential procedures used in dedicated statistical packages [27]. The "
         "recall of slow-drip detection was considered in this research, with the "
         "stateful session layer (Group 2) treated as the independent variable and "
         "slow-drip recall as the dependent variable, while accuracy, precision, "
@@ -665,23 +665,23 @@ d2.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 d2.paragraph_format.line_spacing = 1.15
 run(d2, "The findings agree with the results of earlier studies cautioning against "
         "per-packet classification of covert channels: entropy-only detectors drop "
-        "below 40% detection on Hex or encrypted encodings [16], [20], volume-based "
-        "statistical methods cannot see drip-paced sessions [28], [55], and per-query "
+        "below 40% detection on Hex or encrypted encodings [14], [15], volume-based "
+        "statistical methods cannot see drip-paced sessions [16], [7], and per-query "
         "deep sequence models remain exploitable when the adversary matches label "
-        "statistics to the benign distribution [70], [26]. Timing-based beacon "
+        "statistics to the benign distribution [20], [6]. Timing-based beacon "
         "detection has been reported at 90% to 95% precision in the HTTP domain "
-        "[13], and the DNS beacon detector proposed here behaves consistently: it "
+        "[2], and the DNS beacon detector proposed here behaves consistently: it "
         "fired on every machine-periodic session in both the evaluation and the live "
         "deployment while never flagging Poisson-arriving benign traffic, and a "
         "minimum-interval guard of five seconds correctly exempts fast "
-        "keepalive-style pollers [38]. The sequential z-test formulation inherits the "
+        "keepalive-style pollers [21]. The sequential z-test formulation inherits the "
         "statistical guarantees of sequential analysis while remaining "
         "computationally trivial, requiring a single subtraction and division per "
         "query. The improvement reported here is also consistent with independent "
         "work showing that behavioural analytics combined with anomaly scoring "
-        "improves detection over single-stage classifiers [48], [46], and with "
+        "improves detection over single-stage classifiers [22], [13], and with "
         "ensemble approaches that report better robustness when payload content is "
-        "unavailable [15], [25]. However, some limitations remain. Precision on the "
+        "unavailable [23], [24]. However, some limitations remain. Precision on the "
         "slow-drip profile averages 71.65%, because a small fraction of benign "
         "hash-label queries shares the entropy band that the tunnel must occupy and is "
         "escalated alongside the true positives; the reported mitigations of "
@@ -695,7 +695,7 @@ run(d2, "The findings agree with the results of earlier studies cautioning again
         "still a laboratory simulation, and a drip arriving with literally zero benign "
         "background would build its own baseline and evade the z-test, although the "
         "beacon detector would still fire on its timing; real networks always carry "
-        "benign DNS, and the evaluation mixes it in deliberately [72], [44].", size=12)
+        "benign DNS, and the evaluation mixes it in deliberately [25], [10].", size=12)
 doc.add_paragraph()
 
 para("Para 3:", size=14, bold=True, color=RED)
@@ -705,13 +705,13 @@ d3.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 d3.paragraph_format.line_spacing = 1.15
 run(d3, "Looking ahead, the path is more distinct and hopeful: extending the same "
         "session statistics to the response channel so that command-and-control "
-        "answer traffic is profiled per client [6], [7]; shard-level state merging "
+        "answer traffic is profiled per client [28], [29]; shard-level state merging "
         "for enterprise resolver scale so that a detector can serve forwarder farms "
-        "handling hundreds of thousands of queries per second [44], [72]; adaptive "
+        "handling hundreds of thousands of queries per second [10], [25]; adaptive "
         "retraining loops that feed confirmed false positives back into the training "
-        "corpus [29]; and extending coverage to encrypted DNS transport such as DoH "
+        "corpus [30]; and extending coverage to encrypted DNS transport such as DoH "
         "and DoT, where payload inspection is impossible and timing and volume "
-        "behaviour become the only available signal [9], [24]. Each of these builds "
+        "behaviour become the only available signal [31], [32]. Each of these builds "
         "directly on the stateful statistical layer introduced here, and none requires "
         "abandoning the lightweight per-query classifier that keeps the system "
         "deployable on commodity hardware.", size=12)
@@ -952,10 +952,41 @@ def format_ref(text):
     return t
 
 
-refs = [l.rstrip("\n") for l in open("refs_clean.txt")
-        if "\t" in l and l.strip()]
-for i, line in enumerate(refs, 1):
-    body = line.split("\t", 1)[1]
+def add_hyperlink(paragraph, text, url, size=11):
+    """Plain-styled clickable link (matches the sample's linked citations)."""
+    r_id = paragraph.part.relate_to(
+        url, "http://schemas.openxmlformats.org/officeDocument/2006/"
+             "relationships/hyperlink", is_external=True)
+    hl = OxmlElement("w:hyperlink")
+    hl.set(qn("r:id"), r_id)
+    r = OxmlElement("w:r")
+    rPr = OxmlElement("w:rPr")
+    rf = OxmlElement("w:rFonts")
+    for a in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+        rf.set(qn(a), FONT)
+    rPr.append(rf)
+    for tag, val in (("w:color", "000000"), ("w:u", "none")):
+        e = OxmlElement(tag)
+        e.set(qn("w:val"), val)
+        rPr.append(e)
+    e = OxmlElement("w:sz"); e.set(qn("w:val"), str(size * 2)); rPr.append(e)
+    r.append(rPr)
+    t = OxmlElement("w:t")
+    t.set(qn("xml:space"), "preserve")
+    t.text = text
+    r.append(t)
+    hl.append(r)
+    paragraph._p.append(hl)
+
+
+# citation-order reference list with links: refs_new.txt = N, citation, URL
+refs = []
+for l in open("refs_new.txt"):
+    parts = l.rstrip("\n").split("\t")
+    if len(parts) >= 2 and parts[0].strip():
+        refs.append((parts[0].strip(), parts[1].strip(),
+                     parts[2].strip() if len(parts) > 2 else ""))
+for num, body, url in refs:
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     pf = p.paragraph_format
@@ -963,9 +994,95 @@ for i, line in enumerate(refs, 1):
     pf.space_after = Pt(2)
     pf.left_indent = Inches(0.3)
     pf.first_line_indent = Inches(-0.3)
-    run(p, f"{i}. ", size=11)
+    if url:
+        add_hyperlink(p, f"{num}. ", url, size=11)
+    else:
+        run(p, f"{num}. ", size=11)
     run(p, format_ref(body), size=11)
 
 doc.save(OUT)
 print("written:", OUT)
 print("references:", len(refs))
+# ---- post-pass: make every in-text [N] citation a clickable link -------
+import re as _re
+from docx.oxml.ns import qn as _qn
+from docx.oxml import OxmlElement as _Ox
+from docx.opc.constants import RELATIONSHIP_TYPE as _RT
+
+_urls = {int(n): u for n, _, u in
+         (l.split("\t") for l in open("refs_new.txt") if "\t" in l)}
+
+def _linkify_run(p, run):
+    """Replace a run with text + hyperlinked [N] segments (single pass)."""
+    text = run.text
+    tokens = list(_re.finditer(r"(?<![\w.\]])\[(\d+(?:, ?\d+)*)\]", text))
+    if not tokens:
+        return
+    r = run._r
+    parent = r.getparent()
+    idx = list(parent).index(r)
+    trPr = r.find(_qn("w:rPr"))
+
+    segs, last = [], 0
+    for m in tokens:
+        if m.start() > last:
+            segs.append(("text", text[last:m.start()]))
+        segs.append(("link", m.group(0)))
+        last = m.end()
+    if last < len(text):
+        segs.append(("text", text[last:]))
+
+    def _plain(val):
+        nr = _Ox("w:r")
+        if trPr is not None:
+            import copy as _c
+            nr.append(_c.deepcopy(trPr))
+        t = _Ox("w:t")
+        t.set(_qn("xml:space"), "preserve")
+        t.text = val
+        nr.append(t)
+        return nr
+
+    nodes = []
+    for kind, val in segs:
+        if kind == "text":
+            nodes.append(_plain(val))
+            continue
+        first = _urls.get(int(_re.findall(r"\d+", val)[0]))
+        if not first:
+            nodes.append(_plain(val))
+            continue
+        hl = _Ox("w:hyperlink")
+        rid = p.part.relate_to(first, _RT.HYPERLINK, is_external=True)
+        hl.set(_qn("r:id"), rid)
+        nr = _Ox("w:r")
+        rPr = _Ox("w:rPr")
+        rf = _Ox("w:rFonts")
+        for a in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+            rf.set(_qn(a), FONT)
+        rPr.append(rf)
+        e = _Ox("w:color"); e.set(_qn("w:val"), "000000"); rPr.append(e)
+        e = _Ox("w:u"); e.set(_qn("w:val"), "none"); rPr.append(e)
+        nr.append(rPr)
+        t = _Ox("w:t")
+        t.set(_qn("xml:space"), "preserve")
+        t.text = val
+        nr.append(t)
+        hl.append(nr)
+        nodes.append(hl)
+    parent.remove(r)
+    for i, node in enumerate(nodes):
+        parent.insert(idx + i, node)
+
+
+for slide_par in doc.paragraphs:
+    for r in list(slide_par.runs):
+        _linkify_run(slide_par, r)
+for table in doc.tables:
+    for row in table.rows:
+        for cell in row.cells:
+            for p in cell.paragraphs:
+                for r in list(p.runs):
+                    _linkify_run(p, r)
+doc.save(OUT)
+print("in-text citations linked")
