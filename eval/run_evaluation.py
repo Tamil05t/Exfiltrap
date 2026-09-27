@@ -199,8 +199,20 @@ def _fmt(v) -> str:
     return str(v)
 
 
-def _write_csv(path: Path, row: dict) -> None:
+def _write_csv(path: Path, row: dict, fresh: bool = False) -> None:
+    """Append one row, writing a header if the file is new.
+
+    ``fresh=True`` truncates the file first, so the result is the record of
+    THIS run rather than a row on the end of a history. These files used to be
+    append-only, which meant `metrics_fast_full.csv` held ~28 historical runs
+    with no way to tell which row a documented number came from — the README
+    headline ended up matching an older row than the file's last row. Found by
+    `tools/verify_console.py` (claims H2 and H5); the per-run history that
+    genuinely matters lives in the multiseed JSON, not here.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    if fresh:
+        path.unlink(missing_ok=True)
     new = not path.exists()
     with path.open("a", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(row))
@@ -335,11 +347,14 @@ def main(argv: list[str] | None = None) -> int:
                   f"rec={_fmt(res['recall'])} fpr={_fmt(res['fpr'])} "
                   f"lat={_fmt(res['detection_latency_s'])}s "
                   f"decode={_fmt(res['decode_success_rate'])}")
-            _write_csv(out_dir / f"metrics_{profile}_{res['mode']}.csv", res)
+            _write_csv(out_dir / f"metrics_{profile}_{res['mode']}.csv", res,
+                       fresh=True)
 
     summary_path = out_dir / "summary.csv"
-    for res in results:
-        _write_csv(summary_path, res)
+    for i, res in enumerate(results):
+        # fresh only on the first row, so all of this run's rows land together
+        # but last run's rows do not survive.
+        _write_csv(summary_path, res, fresh=(i == 0))
 
     print("\n=== summary ===")
     header = ["profile", "mode", "accuracy", "precision", "recall", "fpr",

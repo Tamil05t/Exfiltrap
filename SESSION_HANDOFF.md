@@ -86,8 +86,11 @@ the user's live wlo1 engine driven with real LAN traffic the whole time.
     dashboard+monitors, each call 1.4s at ~100k rows (unindexed table
     aggregates + lock) → verdict reads queued behind them. Fix: covering
     indexes idx_queries_risk/src (27.3→5.0ms on the doughnut query) +
-    2s TTL cache on the /api/stats route. Future work: materialized
-    rolling aggregates for the timeseries.
+    0.5s TTL cache on the /api/stats route. The TTL must stay WELL BELOW
+    the console's poll interval: at 2s against a 2s client poll,
+    consecutive polls alternated fresh/cache-hit, so the counters sat
+    still for one beat and then jumped (read as "the numbers are stuck").
+    Future work: materialized rolling aggregates for the timeseries.
 
 Sandbox-only artifact (parked, not a product bug): in the shared test
 netns each beacon query appeared twice on the wire ~0.5-2.5s apart
