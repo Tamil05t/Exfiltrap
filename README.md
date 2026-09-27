@@ -61,7 +61,7 @@ prompt on Windows); afterwards it behaves like every installed application.
 |---|---|---|---|---|
 | **Linux (any distro)** | scapy on any iface via `CAP_NET_RAW` | iptables, namespace-scoped and safety-gated | `sudo ./tools/install_linux.sh eth0` (once) | `systemctl start exfiltrap@eth0`, auto-starts at boot; dashboard needs no privileges |
 | **Linux desktop app** | — | — | `.deb`/`.rpm` (system webkit) · **AppImage** (bundled webkit — single file, runs on any glibc ≥ 2.35 distro; on FUSE-less systems: `./ExFilTrap.AppImage --appimage-extract-and-run`) · **PKGBUILD** for Arch (system webkit) · **Flatpak** (runtime-pinned webkit) | unprivileged native monitor window |
-| **Windows 10/11** | scapy + Npcap (bundled by installer) | `netsh advfirewall` rules prefixed `ExFilTrap-block-*` | `build_windows.bat` → Inno Setup `ExFilTrap-Setup.exe`: one UAC prompt, installs Npcap silently, registers auto-start service | service runs at boot like any app; desktop shortcut opens the dashboard unprivileged |
+| **Windows 10/11** | scapy + Npcap (bundled by installer) | `netsh advfirewall` rules prefixed `ExfilTrap-block-*` | `build_windows.bat` → Inno Setup `ExFilTrap-Setup.exe`: one UAC prompt, installs Npcap silently, registers auto-start service | service runs at boot like any app; desktop shortcut opens the dashboard unprivileged |
 | **Linux service binary (no Python)** | any iface via CAP_NET_RAW | iptables/log | download `exfiltrap-linux-service` artifact | `sudo ./exfiltrap service --iface wlan0` |
 
 ### Windows antivirus posture (real engineering, documented)
@@ -83,7 +83,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 # python3 does not have the dependencies (joblib, sklearn, scapy...).
 # To use the system python instead:
 #   python3 -m pip install --break-system-packages -r requirements.txt
-make test            # 198 tests, no root needed
+make test            # 348 tests: 347 pass, 1 root-only skip
 make train           # trains data/model/rf_model.joblib (reproducible, seeded)
 make eval            # reproduces the results table
 sudo make service               # live service (internet iface + loopback stub)
@@ -124,6 +124,36 @@ it runs plain `iptables` only from *inside* the target namespace, or via
 `ip netns exec nsA` from the host; anything else raises `SafetyError`
 unless the explicit `--i-know-this-is-isolated` flag is supplied.
 
+## Attack + response console
+
+One terminal, one menu: play an attacker, then prove the response works.
+
+```bash
+python3 tools/demo_console.py                   # menu: 1-11 attacks, 12 story,
+                                                #   13 response self-test, 14 live
+python3 tools/demo_console.py --list            # scenario + check catalogue
+python3 tools/demo_console.py --scenario smash_grab --intensity high
+python3 tools/demo_console.py --mitigations     # every mitigation backend, offline
+python3 tools/demo_console.py --live-mitigation # arm sinkhole ▸ attack ▸ read back
+```
+
+The **attack** half sends real DNS (payloads under the IETF-reserved
+`tunnel.example`) through the real resolver, so live capture sees it on the
+wire; the verdict is read back from `127.0.0.1:5050`.
+
+The **response** half drives the shipped mitigation classes in-process with
+real `RiskAssessment` objects and prints the evidence — no root, no firewall
+change, no running engine. 18 checks: `LogOnlyMitigation` gating; the
+iptables safety rail, override path and IP validation; the netsh elevation
+rail and rule shape; `DomainSinkhole` (confirmed / session-only / strike
+accumulation / popularity guard / hosts injection / TTL reaper); and
+`PolicyMitigation` (allowlist / self-DoS guard / domain response / TTL
+auto-unban / manual reversal), plus one end-to-end detection→response chain.
+
+`--live-mitigation` is the only part that writes to the host: it arms the
+domain sinkhole via the API (which edits the hosts file the engine is
+configured for) and disarms it again at the end. Everything else is read-only.
+
 ## Modules
 
 ```
@@ -143,10 +173,12 @@ exfiltrap/privileges.py       capability/admin discovery + CLI report
 exfiltrap/pipeline.py         full chain wiring, RF-only control switch
 tools/                        attacker client, benign generator, trainer,
                               netns lab, Linux install/uninstall
+tools/demo_console.py         attack + response console (11 attack scenarios,
+                              18 mitigation checks, live sinkhole round-trip)
 eval/run_evaluation.py        M11: 3 profiles × (full, RF-only), CSV outputs
 packaging/linux|windows/      systemd unit, PyInstaller spec, Inno Setup
 desktop/                      Tauri shell (tray + health-gated window)
-tests/                        15 modules, 198 tests
+tests/                        23 modules, 348 tests
 ```
 
 ## Resource notes (nothing was removed to get them)
@@ -233,7 +265,8 @@ status header (mode, uptime, capture heartbeat) and pausable 5s refresh.
 
 ## Definition of Done
 
-- [x] 202 unit/integration tests pass (one root-only live-sniff skip).
+- [x] 348 unit/integration tests collected: 347 pass, 1 skipped
+      (needs root for live sniffing).
 - [x] Full pipeline runs end-to-end (synthetic evaluation; live lab
       procedure + scripts; service smoke-tested live with HTTP
       API verified).
