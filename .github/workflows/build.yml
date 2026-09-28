@@ -134,14 +134,50 @@ jobs:
           if (-not (Test-Path dist/ExfilTrap-Setup.exe)) {
             throw "ISCC reported success but dist/ExfilTrap-Setup.exe is missing"
           }
+      - name: Stage a flat release bundle (one folder, one obvious entry point)
+        shell: pwsh
+        run: |
+          # The artifact used to be uploaded straight out of the build tree,
+          # and upload-artifact preserves each path relative to the workspace.
+          # The download therefore unpacked as
+          #   exfiltrap-windows\dist\ExFilTrap-Setup.exe
+          #   exfiltrap-windows\dist\exfiltrap\...              (110 MB of engine)
+          #   exfiltrap-windows\desktop\src-tauri\target\release\exfiltrap-desktop.exe
+          # - three levels deep, no README and no single entry point, so the
+          # only way to find the installer was to go looking for it.
+          # Stage what a user actually needs into package\ and upload that:
+          # the zip then opens on ONE folder whose first entry is the setup exe.
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item dist/ExFilTrap-Setup.exe package/ExFilTrap-Setup.exe -Force
+          Copy-Item desktop/src-tauri/target/release/exfiltrap-desktop.exe package/ExFilTrap-Desktop.exe -Force
+          Set-Content -Path package/README-WINDOWS.txt -Encoding ASCII -Value @(
+            'ExFilTrap for Windows',
+            '=====================',
+            '',
+            'RUN THIS:   ExFilTrap-Setup.exe',
+            '',
+            'It installs to "C:\Program Files (x86)\ExfilTrap" (this is a',
+            '32-bit installer, so {autopf} resolves there), registers the',
+            'ExFilTrapSvc Windows service (auto-start) and adds the Start Menu',
+            'entry "ExFilTrap".',
+            '',
+            'ALSO REQUIRED: Npcap  -  https://npcap.com/#download',
+            '',
+            'Npcap is the packet-capture driver Wireshark also uses. The engine',
+            'cannot see a single DNS query without it: the console opens, then',
+            'sits on "Capture degraded" forever. Running ExFilTrap as',
+            'Administrator does NOT substitute for it - the driver itself is',
+            'what is missing.',
+            '',
+            'ExFilTrap-Desktop.exe is the application window on its own, kept',
+            'here for reference. ExFilTrap-Setup.exe is what you want.'
+          )
+          Get-ChildItem package | ForEach-Object { Write-Host ("  " + $_.Name + "  " + $_.Length + " bytes") }
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: exfiltrap-windows
-          path: |
-            dist/exfiltrap/
-            dist/*.exe
-            desktop/src-tauri/target/release/exfiltrap-desktop.exe
+          path: package/*
           if-no-files-found: error
 
   linux-service:

@@ -17,6 +17,7 @@ deployment the source IP alone is always the machine itself:
 from __future__ import annotations
 
 import ipaddress
+import os
 import queue
 import threading
 
@@ -25,6 +26,78 @@ from scapy.all import DNS, IP, sniff
 
 from exfiltrap import config
 from exfiltrap.events import DNSQuery, DNSResponse
+
+# The driver scapy needs to see layer-2 frames on Windows (it is the same one
+# Wireshark ships). Named here because its ABSENCE is the single most common
+# way this product looks broken while being perfectly healthy: scapy imports
+# fine, logs one "No libpcap provider available" warning at import, and then
+# every AsyncSniffer start() fails. A Windows service has no console, so that
+# warning goes nowhere and the operator's only symptom is a red banner.
+NPCAP_DOWNLOAD_URL = "https://npcap.com/#download"
+
+# Any one of these means Npcap/WinPcap is actually installed.
+_PCAP_MARKERS = ("Npcap", r"drivers\npcap.sys", "wpcap.dll", "Packet.dll")
+
+
+def _pcap_driver_present() -> bool:
+    """Any trace of the Npcap/WinPcap driver in the system directory."""
+    root = os.environ.get("SystemRoot", r"C:\Windows")
+    system32 = os.path.join(root, "System32")
+    return any(os.path.exists(os.path.join(system32, name))
+               for name in _PCAP_MARKERS)
+
+
+def capture_backend() -> dict:
+    """Can this process open a sniffing socket — and if not, exactly why?
+
+    Returns ``{"ok", "provider", "reason", "remedy", "url"}``. The four
+    non-``ok`` keys are empty strings when ``ok`` is True.
+
+    This exists because "capture degraded" on its own is unactionable. The
+    engine reports the *cause* and the *fix* through /api/status so the
+    console can say "the capture driver is not installed, get it here"
+    instead of leaving the operator to guess — and to guess wrong, since the
+    obvious guess ("run it as Administrator") cannot help when the driver
+    itself is missing.
+    """
+    try:
+        from scapy.config import conf
+
+        use_pcap = bool(getattr(conf, "use_pcap", False))
+    except Exception as exc:  # noqa: BLE001 — never raise from a status route
+        return {"ok": False, "provider": None,
+                "reason": f"scapy could not be loaded ({exc})",
+                "remedy": "Reinstall ExFilTrap.", "url": ""}
+
+    if use_pcap:
+        return {"ok": True, "provider": "libpcap/npcap",
+                "reason": "", "remedy": "", "url": ""}
+
+    if os.name == "nt":
+        if _pcap_driver_present():
+            reason = ("scapy loaded no libpcap provider even though the Npcap "
+                      "driver files are present — the driver install is "
+                      "damaged, or the service started while it was still "
+                      "being installed")
+            remedy = ("Reinstall Npcap, then restart the ExFilTrap service.")
+        else:
+            reason = ("the Npcap packet-capture driver is not installed, so "
+                      "scapy has no libpcap provider and capture cannot start")
+            remedy = ("Install Npcap — the driver Wireshark uses — then "
+                      "restart the ExFilTrap service. Running ExFilTrap as "
+                      "Administrator does NOT help: the driver itself is "
+                      "missing, so there is nothing to elevate.")
+        return {"ok": False, "provider": None, "reason": reason,
+                "remedy": remedy, "url": NPCAP_DOWNLOAD_URL}
+
+    return {
+        "ok": False,
+        "provider": None,
+        "reason": ("scapy loaded no libpcap provider, so capture cannot start"),
+        "remedy": ("Install libpcap (Debian/Ubuntu: apt install libpcap0.8; "
+                   "Arch: pacman -S libpcap) and restart the service."),
+        "url": "",
+    }
 
 
 def _dns_layer(pkt):

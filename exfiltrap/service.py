@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import logging
+import logging.handlers
 import os
 import queue
 import signal
@@ -55,6 +56,38 @@ def _import_tool(name: str):
     return module
 
 
+def _configure_logging(verbose: bool) -> None:
+    """Send the engine's log somewhere an operator can actually read it.
+
+    A Windows service has no console, so logging's default stderr handler
+    writes into a void: every "capture on Ethernet DIED (...)" line — the one
+    place the real cause of a degraded capture was ever written down — was
+    discarded, and the only symptom left was a red banner in the console with
+    nothing to explain it. Under Windows the log therefore also goes to
+    ``%PROGRAMDATA%\\ExFilTrap\\service.log``, next to the database the
+    installer already creates for us. It is rotated: a capture loop that
+    cannot open its socket retries every two seconds, forever.
+    """
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if os.name == "nt":
+        try:
+            log_dir = (Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
+                       / "ExFilTrap")
+            log_dir.mkdir(parents=True, exist_ok=True)
+            handlers.append(logging.handlers.RotatingFileHandler(
+                log_dir / "service.log", maxBytes=1_000_000, backupCount=3,
+                encoding="utf-8"))
+        except OSError as exc:
+            # Logging must never be the reason the engine fails to start.
+            print(f"warning: cannot open the service log: {exc}",
+                  file=sys.stderr)
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=handlers,
+    )
+
+
 class ServiceRuntime:
     """Shared state between the capture thread and the API."""
 
@@ -65,6 +98,9 @@ class ServiceRuntime:
         self._last_beat = time.monotonic()
         # iface -> (last supervision tick, ok flag)
         self._capture: dict[str, tuple[float, bool]] = {}
+        # iface -> why the last (re)spawn failed. Surfaced through
+        # /api/status so "capture degraded" can name its own cause.
+        self._capture_error: dict[str, str] = {}
         self._lock = threading.Lock()
 
     def count(self) -> None:
@@ -77,15 +113,26 @@ class ServiceRuntime:
         with self._lock:
             self._last_beat = time.monotonic()
 
-    def capture_beat(self, iface: str, ok: bool = True) -> None:
+    def capture_beat(self, iface: str, ok: bool = True,
+                     error: str | None = None) -> None:
         """Per-interface liveness mark from the capture supervisor.
 
         ``ok=True`` only ever comes from a supervisor tick that found the
         interface's sniffer thread alive — never from spawn, so a sniffer
         that dies instantly cannot fake health by respawning.
+
+        ``error`` carries the reason a (re)spawn failed, and is kept until a
+        tick finally reports the interface healthy again: a later tick that
+        merely observes the dead thread has no exception of its own, so
+        letting it overwrite the stored cause would erase the one real
+        explanation the operator ever gets.
         """
         with self._lock:
             self._capture[iface] = (time.monotonic(), ok)
+            if error:
+                self._capture_error[iface] = error
+            elif ok:
+                self._capture_error.pop(iface, None)
 
     def capture_ages(self) -> dict[str, float]:
         with self._lock:
@@ -111,9 +158,12 @@ class ServiceRuntime:
             return time.monotonic() - self._last_beat
 
     def status(self) -> dict:
+        from exfiltrap import capture as _capture
+
         with self._lock:
             processed = self.queries_processed
             capture = dict(self._capture)
+            capture_error = dict(self._capture_error)
             now = time.monotonic()
         ifaces = {i: {"age_s": round(now - t, 1),
                       "ok": bool(ok and now - t <= 30.0)}
@@ -127,6 +177,11 @@ class ServiceRuntime:
             "capture_ifaces": ifaces,
             "capture_healthy": (all(v["ok"] for v in ifaces.values())
                                 if ifaces else None),
+            # WHY capture is down and WHAT to do about it. Without these two
+            # the console can only say "degraded", which is the state the
+            # operator is already looking at.
+            "capture_backend": _capture.capture_backend(),
+            "capture_errors": capture_error,
             **privileges.privilege_report(),
         }
 
@@ -244,7 +299,11 @@ class CaptureSupervisor:
                     self._failures[iface] = 0
                     continue
                 exc = getattr(sniffer, "exception", None) if sniffer else None
-                self.runtime.capture_beat(iface, ok=False)
+                # The exception is the whole explanation — scapy stores the
+                # reason a sniffer could not build its socket here, and with
+                # no libpcap provider that reason is the missing driver.
+                self.runtime.capture_beat(
+                    iface, ok=False, error=str(exc) if exc else None)
                 n = self._failures.get(iface, 0) + 1
                 self._failures[iface] = n
                 if n == 1:
@@ -258,6 +317,8 @@ class CaptureSupervisor:
                 try:
                     self.sniffers[iface] = self.spawn_one(iface)
                 except Exception as exc2:  # noqa: BLE001
+                    self.runtime.capture_beat(iface, ok=False,
+                                              error=str(exc2))
                     log.error("capture on %s restart failed: %s",
                               iface, exc2)
 
@@ -266,7 +327,7 @@ class CaptureSupervisor:
             try:
                 self.sniffers[iface] = self.spawn_one(iface)
             except Exception as exc:  # noqa: BLE001
-                self.runtime.capture_beat(iface, ok=False)
+                self.runtime.capture_beat(iface, ok=False, error=str(exc))
                 log.error("capture on %s failed to start: %s — will retry",
                           iface, exc)
         self._thread = threading.Thread(target=self._supervise, daemon=True,
@@ -527,11 +588,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.alert is None:
         args.alert = os.environ.get("EXFILTRAP_ALERT", "none")
     if not args.db:
-        if getattr(sys, "frozen", False):
-            # Frozen engine launched from its package (AppImage mount, deb
-            # resource dir): the executable's own directory can be READ-ONLY
-            # (AppImage squashfs), so the database defaults to a system
-            # data path instead of crashing SQLite at startup.
+        # A frozen engine may have been launched from a read-only package
+        # (AppImage squashfs, deb resource dir), so its own directory is not a
+        # safe default. That reasoning is POSIX-only, and applying it on
+        # Windows actively broke the thing it was written to prevent:
+        # os.makedirs("/var/lib/exfiltrap") succeeds on Windows because a
+        # leading "/" is rooted at the CURRENT DRIVE, so the frozen Windows
+        # engine quietly created C:\var\lib\exfiltrap and put the database
+        # there — outside %PROGRAMDATA%, in a tree created by the SYSTEM
+        # service that inherits C:\'s ACLs, where the UNPRIVILEGED console
+        # cannot write. WAL then cannot create its -wal/-shm siblings and the
+        # console fails with "unable to open database file". On Windows
+        # config._default_db_path() already answers this correctly: the
+        # installer creates %PROGRAMDATA%\ExFilTrap with `users-modify`.
+        if getattr(sys, "frozen", False) and os.name != "nt":
             for data_dir in ("/var/lib/exfiltrap",
                              os.path.expanduser("~/.local/share/exfiltrap"),
                              "/tmp"):
@@ -554,10 +624,7 @@ def main(argv: list[str] | None = None) -> int:
             except OSError:
                 pass
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    _configure_logging(args.verbose)
 
     if not privileges.has_capture_capability():
         print(
@@ -571,6 +638,21 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    # Is there actually a capture backend to use? Elevation says "I am allowed
+    # to capture"; this says "capture is possible at all", and they are
+    # different questions — on Windows the service runs as SYSTEM (allowed)
+    # while the Npcap driver it needs may be absent (not possible). Reporting
+    # it here, once and loudly, is the difference between an operator reading
+    # "install Npcap" and an operator guessing "run it as Administrator".
+    from exfiltrap import capture
+
+    backend = capture.capture_backend()
+    if backend["ok"]:
+        log.info("capture backend ready: %s", backend["provider"])
+    else:
+        log.error("capture backend UNAVAILABLE: %s. %s",
+                  backend["reason"], backend["remedy"])
 
     from exfiltrap.mitigation import LogOnlyMitigation, make_mitigation
 
