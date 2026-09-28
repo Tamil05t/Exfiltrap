@@ -27,7 +27,7 @@
 <body>
   <div class="box">
     <h1><span class="dot" id="d"></span><span id="msg">Waiting for the ExfilTrap detection service…</span></h1>
-    <p>This desktop app is the monitor for the ExfilTrap detection service.
+    <p id="intro">This desktop app is the monitor for the ExfilTrap detection service.
        It starts the bundled engine automatically (one root prompt) and
        switches to the dashboard once it is running on
        <code>127.0.0.1:5050</code>.</p>
@@ -58,6 +58,17 @@
         .then(() => true).catch(() => false);
     }
     function go() { location.replace('http://127.0.0.1:5050'); }
+    // Windows: the engine is an SCM service that ExFilTrap-Setup.exe installs
+    // and starts. This window never starts it there — there is no pkexec and
+    // no polkit — so promising "one root prompt" sent operators looking for a
+    // dialog that was never going to appear. Say what actually happens.
+    if (navigator.userAgent.includes('Windows')) {
+      document.getElementById('intro').innerHTML =
+        'This desktop app is the monitor for the ExfilTrap detection service. ' +
+        'On Windows the engine runs as the <code>ExFilTrapSvc</code> service, ' +
+        'installed and started by <code>ExFilTrap-Setup.exe</code>; this ' +
+        'window connects to it on <code>127.0.0.1:5050</code>.';
+    }
     async function tauriApi() {
       // withGlobalTauri injects asynchronously after page load — wait for it.
       // Tauri v2 exposes invoke under __TAURI__.core (v1 had it at the root).
@@ -88,7 +99,12 @@
     async function startSvc() {
       const st = document.getElementById('status');
       const iface = document.getElementById('iface').value.trim();
-      st.textContent = 'Requesting root authorization (polkit prompt)…';
+      // Windows has no polkit. The shell asks the SCM to start the installed
+      // service there, so naming a root prompt just described something that
+      // was never going to appear.
+      st.textContent = navigator.userAgent.includes('Windows')
+        ? 'Starting the ExFilTrap service…'
+        : 'Requesting root authorization (polkit prompt)…';
       const api = await tauriApi();
       try {
         if (api) {
