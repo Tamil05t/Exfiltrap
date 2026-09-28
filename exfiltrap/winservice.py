@@ -129,14 +129,42 @@ def _get_service_class():
     return ExfilTrapWindowsService
 
 
+def try_host_service() -> bool:
+    """Host the Windows service, but only if the SCM really started us.
+
+    Returns True when this process actually ran as the service — the call
+    blocks for the whole service lifetime, so True means the service has now
+    stopped — and False when the process was started some other way.
+
+    The distinction is unavoidable: the SCM launches the registered binary
+    with no arguments, which looks exactly like a user double-clicking it.
+    pywin32's own HandleCommandLine resolves it the same way we do:
+    StartServiceCtrlDispatcher fails immediately with
+    ERROR_FAILED_SERVICE_CONTROLLER_CONNECT (1063) when the process was not
+    started by the SCM, and blocks until the service stops when it was.
+    """
+    import win32service
+
+    servicemanager = __import__("servicemanager")
+    servicemanager.Initialize()
+    servicemanager.PrepareToHostSingle(_get_service_class())
+    try:
+        servicemanager.StartServiceCtrlDispatcher()
+    except win32service.error as exc:
+        # 1063 == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT, written literally
+        # rather than imported from `winerror` so this keeps working if that
+        # constant ever moves.
+        if exc.winerror == 1063:
+            return False
+        raise
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
     if "--run" in argv or not argv:
         # SCM-started path: hand control to pywin32's dispatcher.
-        servicemanager = __import__("servicemanager")
-        servicemanager.Initialize()
-        servicemanager.PrepareToHostSingle(_get_service_class())
-        servicemanager.StartServiceCtrlDispatcher()
+        try_host_service()
         return 0
 
     cls = _get_service_class()

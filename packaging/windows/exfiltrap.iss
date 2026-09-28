@@ -34,6 +34,28 @@
 #define MyAppPublisher "ExfilTrap Project"
 #define MyAppExeName "exfiltrap.exe"
 
+; The Tauri desktop shell — the actual application WINDOW, the Windows
+; equivalent of the Linux AppImage's `ex-fil-trap`. Relative to this script,
+; the same base the [Files] Source entries below already use.
+#define ShellRel "..\..\desktop\src-tauri\target\release\exfiltrap-desktop.exe"
+
+; Was the shell actually compiled? This has to be answered at COMPILE time.
+;
+; A runtime check cannot work here. Windows paths are case-insensitive, so
+;     FileExists(ExpandConstant('{app}\ExFilTrap.exe'))
+; also matches the engine's `exfiltrap.exe`, which lands in the very same
+; directory. The old ShellBuilt() therefore always answered TRUE: every
+; shortcut, every App Paths key and the postinstall launch pointed at
+; "{app}\ExFilTrap.exe" — that is, at the ENGINE — and ran it with no
+; arguments. The engine's no-argument behaviour is to print its CLI help and
+; exit, so clicking the Start Menu entry flashed a console window and
+; vanished. That is the whole bug.
+#if FileExists(AddBackslash(SourcePath) + ShellRel)
+  #define HaveShell
+#else
+  #pragma warning "ExFilTrap: Tauri shell not built (desktop\src-tauri\target\release\exfiltrap-desktop.exe missing) - producing an ENGINE-ONLY installer; the Start Menu entry will run `exfiltrap dashboard`."
+#endif
+
 [Setup]
 AppId={{77C5661C-BBB1-4A21-902F-6EF86D4E7F32}
 AppName={#MyAppName}
@@ -63,14 +85,13 @@ WizardStyle=modern
 
 [Files]
 Source: "..\..\dist\exfiltrap\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
-; The Tauri desktop shell — the actual WINDOW the user launches, the Windows
-; equivalent of the Linux AppImage's `ex-fil-trap`. It polls the service on
-; :5050 and navigates to the dashboard itself, so the Start Menu entry opens
-; an application window rather than a browser tab. Built by
-; build_windows.bat (cargo build --release in desktop/src-tauri).
-Source: "..\..\desktop\src-tauri\target\release\exfiltrap-desktop.exe"; \
-    DestDir: "{app}"; DestName: "ExFilTrap.exe"; \
-    Flags: ignoreversion skipifsourcedoesntexist
+; The Tauri desktop shell, shipped as ExFilTrap.exe. Guarded by the
+; compile-time HaveShell check above — no skipifsourcedoesntexist, so a
+; missing shell can never silently produce a half-broken install again.
+#ifdef HaveShell
+Source: "{#ShellRel}"; DestDir: "{app}"; DestName: "ExFilTrap.exe"; \
+    Flags: ignoreversion
+#endif
 ; Place the Npcap redist next to this script as npcap.exe:
 Source: "npcap.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall skipifsourcedoesntexist external
 
@@ -86,44 +107,63 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; \
 [Icons]
 ; Launch the DESKTOP SHELL so the Start Menu opens a real application
 ; window — the same experience the Linux AppImage gives via ex-fil-trap.
-; The shell polls the service on :5050 and navigates itself. When no shell
-; was compiled, the entry falls back to the dashboard command, which opens
-; the service console in the default browser.
+; The shell polls the service on :5050 and navigates itself.
+;
+; When no shell was compiled the entry falls back to `exfiltrap dashboard`,
+; which probes the service on :5050 and opens that console. Both branches
+; use the SAME icon Name, so re-running the installer after building the
+; shell replaces the entry rather than adding a second one.
 ;
 ; Inno creates NO group folder unless an [Icons] section exists, so the
 ; documented "Start Menu -> ExFilTrap" step used to lead nowhere at all —
 ; the only thing that ever ran was the [Run] postinstall entry below.
+#ifdef HaveShell
 Name: "{group}\{#MyAppName}"; Filename: "{app}\ExFilTrap.exe"; \
-    Comment: "Open the ExFilTrap detection console"; Check: ShellBuilt
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
-    Parameters: "dashboard"; Comment: "Open the ExFilTrap detection console"; \
-    Check: ShellMissing
-Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
+    Comment: "Open the ExFilTrap detection console"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\ExFilTrap.exe"; \
-    Tasks: desktopicon; Check: ShellBuilt
+    Tasks: desktopicon
+#else
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
+    Parameters: "dashboard"; Comment: "Open the ExFilTrap detection console"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
-    Parameters: "dashboard"; Tasks: desktopicon; Check: ShellMissing
+    Parameters: "dashboard"; Tasks: desktopicon
+#endif
+Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 
 [Registry]
 ; App Paths is the mechanism that lets Win+R resolve a bare name to the
 ; installed exe — the same one `chrome` uses. Both spellings are registered
 ; so typing either `exfiltrap` or `ExFilTrap` opens the desktop app.
+#ifdef HaveShell
 Root: HKLM; \
     Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\ExFilTrap.exe"; \
     ValueType: string; ValueName: ""; ValueData: "{app}\ExFilTrap.exe"; \
-    Flags: uninsdeletekey; Check: ShellBuilt
+    Flags: uninsdeletekey
 Root: HKLM; \
     Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\ExFilTrap.exe"; \
     ValueType: string; ValueName: "Path"; ValueData: "{app}"; \
-    Flags: uninsdeletekey; Check: ShellBuilt
+    Flags: uninsdeletekey
 Root: HKLM; \
     Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{#MyAppExeName}"; \
     ValueType: string; ValueName: ""; ValueData: "{app}\ExFilTrap.exe"; \
-    Flags: uninsdeletekey; Check: ShellBuilt
+    Flags: uninsdeletekey
 Root: HKLM; \
     Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{#MyAppExeName}"; \
     ValueType: string; ValueName: "Path"; ValueData: "{app}"; \
-    Flags: uninsdeletekey; Check: ShellBuilt
+    Flags: uninsdeletekey
+#else
+; Engine-only build. App Paths carries no arguments, and a bare `exfiltrap`
+; now opens the console by itself (__main__ falls through to the dashboard
+; when it is not started by the SCM), so pointing at the engine is enough.
+Root: HKLM; \
+    Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{#MyAppExeName}"; \
+    ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName}"; \
+    Flags: uninsdeletekey
+Root: HKLM; \
+    Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{#MyAppExeName}"; \
+    ValueType: string; ValueName: "Path"; ValueData: "{app}"; \
+    Flags: uninsdeletekey
+#endif
 
 [Ini]
 Filename: "{commonappdata}\ExfilTrap\service.ini"; Section: "service"; \
@@ -143,17 +183,20 @@ Filename: "{app}\{#MyAppExeName}"; Parameters: "winservice start"; \
 ; Open the product at the end of setup. The desktop shell is preferred: it
 ; is the real application window (as on Linux). Without a compiled shell
 ; the `dashboard` command is used instead — it probes the service on :5050
-; and opens THAT console in the browser, so the installer can no longer
-; strand the user on a second, data-less UI on :5000. runasoriginaluser
-; keeps the window in the user's own session, not the elevated installer's.
+; and opens THAT console, so the installer can no longer strand the user on
+; a second, data-less UI on :5000. runasoriginaluser keeps the window in
+; the user's own session, not the elevated installer's.
 ;
-; Both entries share one Description so the Finished page shows a SINGLE
-; "Launch ExFilTrap" check box; their Checks make exactly one of them run.
+; Exactly one of the two branches is compiled in, so the Finished page shows
+; a single "Launch ExFilTrap" check box.
+#ifdef HaveShell
 Filename: "{app}\ExFilTrap.exe"; Description: "Launch ExFilTrap"; \
-    Flags: nowait postinstall skipifsilent runasoriginaluser; Check: ShellBuilt
+    Flags: nowait postinstall skipifsilent runasoriginaluser
+#else
 Filename: "{app}\{#MyAppExeName}"; Parameters: "dashboard"; \
     Description: "Launch ExFilTrap"; \
-    Flags: nowait postinstall skipifsilent runasoriginaluser; Check: ShellMissing
+    Flags: nowait postinstall skipifsilent runasoriginaluser
+#endif
 
 [UninstallRun]
 Filename: "{app}\{#MyAppExeName}"; Parameters: "winservice stop"; Flags: runhidden; RunOnceId: "StopSvc"
@@ -168,19 +211,11 @@ begin
   Result := not DirExists(ExpandConstant('{sys}') + '\Npcap');
 end;
 
-// Was the Tauri desktop shell shipped? [Files] copies it with
-// skipifsourcedoesntexist, so this is the single source of truth for every
-// conditional shortcut / registry entry / launch step. [Files] is processed
-// before [Icons], [Registry] and [Run], so the answer is already final.
-function ShellBuilt(): Boolean;
-begin
-  Result := FileExists(ExpandConstant('{app}\ExFilTrap.exe'));
-end;
-
-function ShellMissing(): Boolean;
-begin
-  Result := not ShellBuilt();
-end;
+// There is deliberately no ShellBuilt()/ShellMissing() here any more.
+// "Was the shell built?" is a compile-time question (see HaveShell at the
+// top): a runtime FileExists('{app}\ExFilTrap.exe') is case-insensitive on
+// Windows and therefore also matches the engine's exfiltrap.exe, so it
+// always answered TRUE and every shortcut pointed at the console engine.
 
 function GetIface(Param: String): String;
 var
