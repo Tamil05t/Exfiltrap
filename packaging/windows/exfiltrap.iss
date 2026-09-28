@@ -7,7 +7,13 @@
 ;     capture driver on Windows; same driver Wireshark uses)
 ;   - writes %PROGRAMDATA%\ExfilTrap\service.ini
 ;   - registers and STARTS the ExfilTrapSvc Windows Service (auto-start)
-;   - Start Menu shortcut launches the unprivileged dashboard
+;   - Start Menu + desktop shortcuts, and an App Paths entry so a bare
+;     `exfiltrap` resolves from Win+R
+;
+; The evidence database lives in %PROGRAMDATA%\ExfilTrap (see
+; config._default_db_path), NOT under Program Files: WAL journaling creates
+; -wal/-shm siblings next to the file, and Program Files is read-only for
+; the unprivileged console.
 ;
 ; The Npcap installer must be placed next to this script as npcap.exe
 ; before compiling (download the "Installer for Windows" from
@@ -57,11 +63,67 @@ WizardStyle=modern
 
 [Files]
 Source: "..\..\dist\exfiltrap\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+; The Tauri desktop shell — the actual WINDOW the user launches, the Windows
+; equivalent of the Linux AppImage's `ex-fil-trap`. It polls the service on
+; :5050 and navigates to the dashboard itself, so the Start Menu entry opens
+; an application window rather than a browser tab. Built by
+; build_windows.bat (cargo build --release in desktop/src-tauri).
+Source: "..\..\desktop\src-tauri\target\release\exfiltrap-desktop.exe"; \
+    DestDir: "{app}"; DestName: "ExFilTrap.exe"; \
+    Flags: ignoreversion skipifsourcedoesntexist
 ; Place the Npcap redist next to this script as npcap.exe:
 Source: "npcap.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall skipifsourcedoesntexist external
 
 [Dirs]
 Name: "{commonappdata}\ExfilTrap"; Permissions: users-modify
+
+[Tasks]
+; The Start Menu entry is not optional; the desktop icon is opt-out, like
+; every other installer.
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; \
+    GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+
+[Icons]
+; Launch the DESKTOP SHELL so the Start Menu opens a real application
+; window — the same experience the Linux AppImage gives via ex-fil-trap.
+; The shell polls the service on :5050 and navigates itself. When no shell
+; was compiled, the entry falls back to the dashboard command, which opens
+; the service console in the default browser.
+;
+; Inno creates NO group folder unless an [Icons] section exists, so the
+; documented "Start Menu -> ExFilTrap" step used to lead nowhere at all —
+; the only thing that ever ran was the [Run] postinstall entry below.
+Name: "{group}\{#MyAppName}"; Filename: "{app}\ExFilTrap.exe"; \
+    Comment: "Open the ExFilTrap detection console"; Check: ShellBuilt
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
+    Parameters: "dashboard"; Comment: "Open the ExFilTrap detection console"; \
+    Check: ShellMissing
+Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\ExFilTrap.exe"; \
+    Tasks: desktopicon; Check: ShellBuilt
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
+    Parameters: "dashboard"; Tasks: desktopicon; Check: ShellMissing
+
+[Registry]
+; App Paths is the mechanism that lets Win+R resolve a bare name to the
+; installed exe — the same one `chrome` uses. Both spellings are registered
+; so typing either `exfiltrap` or `ExFilTrap` opens the desktop app.
+Root: HKLM; \
+    Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\ExFilTrap.exe"; \
+    ValueType: string; ValueName: ""; ValueData: "{app}\ExFilTrap.exe"; \
+    Flags: uninsdeletekey; Check: ShellBuilt
+Root: HKLM; \
+    Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\ExFilTrap.exe"; \
+    ValueType: string; ValueName: "Path"; ValueData: "{app}"; \
+    Flags: uninsdeletekey; Check: ShellBuilt
+Root: HKLM; \
+    Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{#MyAppExeName}"; \
+    ValueType: string; ValueName: ""; ValueData: "{app}\ExFilTrap.exe"; \
+    Flags: uninsdeletekey; Check: ShellBuilt
+Root: HKLM; \
+    Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{#MyAppExeName}"; \
+    ValueType: string; ValueName: "Path"; ValueData: "{app}"; \
+    Flags: uninsdeletekey; Check: ShellBuilt
 
 [Ini]
 Filename: "{commonappdata}\ExfilTrap\service.ini"; Section: "service"; \
@@ -78,8 +140,20 @@ Filename: "{app}\{#MyAppExeName}"; Parameters: "winservice install"; \
     Flags: runhidden
 Filename: "{app}\{#MyAppExeName}"; Parameters: "winservice start"; \
     Flags: runhidden; AfterInstall: WaitForService
-; Unprivileged dashboard shortcut target (just opens the local API UI).
-Filename: "{app}\{#MyAppExeName}"; Parameters: "dashboard"; Flags: nowait postinstall skipifsilent
+; Open the product at the end of setup. The desktop shell is preferred: it
+; is the real application window (as on Linux). Without a compiled shell
+; the `dashboard` command is used instead — it probes the service on :5050
+; and opens THAT console in the browser, so the installer can no longer
+; strand the user on a second, data-less UI on :5000. runasoriginaluser
+; keeps the window in the user's own session, not the elevated installer's.
+;
+; Both entries share one Description so the Finished page shows a SINGLE
+; "Launch ExFilTrap" check box; their Checks make exactly one of them run.
+Filename: "{app}\ExFilTrap.exe"; Description: "Launch ExFilTrap"; \
+    Flags: nowait postinstall skipifsilent runasoriginaluser; Check: ShellBuilt
+Filename: "{app}\{#MyAppExeName}"; Parameters: "dashboard"; \
+    Description: "Launch ExFilTrap"; \
+    Flags: nowait postinstall skipifsilent runasoriginaluser; Check: ShellMissing
 
 [UninstallRun]
 Filename: "{app}\{#MyAppExeName}"; Parameters: "winservice stop"; Flags: runhidden; RunOnceId: "StopSvc"
@@ -92,6 +166,20 @@ Type: filesandordirs; Name: "{commonappdata}\ExfilTrap"
 function NpcapMissing(): Boolean;
 begin
   Result := not DirExists(ExpandConstant('{sys}') + '\Npcap');
+end;
+
+// Was the Tauri desktop shell shipped? [Files] copies it with
+// skipifsourcedoesntexist, so this is the single source of truth for every
+// conditional shortcut / registry entry / launch step. [Files] is processed
+// before [Icons], [Registry] and [Run], so the answer is already final.
+function ShellBuilt(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\ExFilTrap.exe'));
+end;
+
+function ShellMissing(): Boolean;
+begin
+  Result := not ShellBuilt();
 end;
 
 function GetIface(Param: String): String;

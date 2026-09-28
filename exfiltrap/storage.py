@@ -24,6 +24,7 @@ from __future__ import annotations
 import sqlite3
 import time
 import threading
+import pathlib
 
 from exfiltrap import config
 
@@ -117,6 +118,15 @@ class Storage:
         self.flush_every = max(1, flush_every)
         self._lock = threading.Lock()
         self._pending = 0
+        # WAL journaling creates ``-wal``/``-shm`` siblings next to the
+        # database, so the PARENT DIRECTORY must exist and be writable before
+        # we connect — otherwise SQLite reports "unable to open database
+        # file" and every dashboard route 500s. On a fresh Windows install
+        # %PROGRAMDATA%\ExfilTrap exists (the installer creates it), but a
+        # first run from a source checkout may not have data/ yet.
+        parent = pathlib.Path(self.db_path).parent
+        if str(parent) not in ("", "."):
+            parent.mkdir(parents=True, exist_ok=True)
         # isolation_level=None = autocommit: multiple connections (the
         # service's pipeline sink AND the dashboard/API) share this file,
         # and a lingering implicit transaction on one would lock the other

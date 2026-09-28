@@ -38,6 +38,33 @@ if defined SIGN_CMD (
   for %%F in (dist\exfiltrap\exfiltrap.exe) do %SIGN_CMD% %%F
 )
 
+echo === building the desktop shell (Tauri app window)
+where cargo >nul 2>nul
+if %errorlevel%==0 (
+  REM tauri-build VALIDATES bundle.resources at COMPILE time, so the engine
+  REM must be staged into resources\ before cargo runs - exactly what the
+  REM Linux AppImage script does. On Windows the shell does not launch the
+  REM engine (the installed Windows Service does), but the path must exist.
+  if exist desktop\src-tauri\resources\exfiltrap-engine rmdir /s /q desktop\src-tauri\resources\exfiltrap-engine
+  if not exist desktop\src-tauri\resources mkdir desktop\src-tauri\resources
+  xcopy /e /i /q /y dist\exfiltrap desktop\src-tauri\resources\exfiltrap-engine >nul
+  pushd desktop\src-tauri
+  cargo build --release
+  if defined SIGN_CMD for %%F in (target\release\exfiltrap-desktop.exe) do %SIGN_CMD% %%F
+  popd
+  if exist desktop\src-tauri\target\release\exfiltrap-desktop.exe (
+    echo Shell: desktop\src-tauri\target\release\exfiltrap-desktop.exe
+  ) else (
+    echo WARNING: the shell build produced no exe - the installer will fall
+    echo          back to opening the dashboard in a browser.
+  )
+) else (
+  echo cargo not found - SKIPPING the desktop shell.
+  echo   Install Rust ^(https://rustup.rs^) and re-run to get the app window.
+  echo   The installer still builds, but its Start Menu entry will open the
+  echo   console in a browser instead of a real application window.
+)
+
 echo === building installer (requires Inno Setup 6: https://jrsoftware.org/isinfo.php)
 where iscc >nul 2>nul
 if %errorlevel%==0 (
