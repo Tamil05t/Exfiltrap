@@ -39,17 +39,24 @@
 ; the same base the [Files] Source entries below already use.
 #define ShellRel "..\..\desktop\src-tauri\target\release\exfiltrap-desktop.exe"
 
+; Installed name of the shell. It MUST NOT be "ExFilTrap.exe": NTFS is
+; case-insensitive, so that is the SAME file as the engine's exfiltrap.exe in
+; the same directory, and installing the shell would silently OVERWRITE the
+; engine with it. (Which also destroys the service, whose ImagePath is that
+; exact path.) A distinct name is the only safe answer — the Start Menu entry
+; still reads "ExFilTrap", and the App Paths key is still `exfiltrap`.
+#define ShellExeName "ExFilTrap-Desktop.exe"
+
 ; Was the shell actually compiled? This has to be answered at COMPILE time.
 ;
-; A runtime check cannot work here. Windows paths are case-insensitive, so
+; A runtime check cannot work here either. Windows paths are case-insensitive,
+; so
 ;     FileExists(ExpandConstant('{app}\ExFilTrap.exe'))
-; also matches the engine's `exfiltrap.exe`, which lands in the very same
-; directory. The old ShellBuilt() therefore always answered TRUE: every
-; shortcut, every App Paths key and the postinstall launch pointed at
-; "{app}\ExFilTrap.exe" — that is, at the ENGINE — and ran it with no
-; arguments. The engine's no-argument behaviour is to print its CLI help and
-; exit, so clicking the Start Menu entry flashed a console window and
-; vanished. That is the whole bug.
+; also matches the engine's `exfiltrap.exe`. The old ShellBuilt() therefore
+; always answered TRUE: every shortcut, every App Paths key and the postinstall
+; launch pointed at the ENGINE and ran it with no arguments. The engine's
+; no-argument behaviour is to print its CLI help and exit, so clicking the
+; Start Menu entry flashed a console window and vanished. That is the whole bug.
 #if FileExists(AddBackslash(SourcePath) + ShellRel)
   #define HaveShell
 #else
@@ -85,11 +92,11 @@ WizardStyle=modern
 
 [Files]
 Source: "..\..\dist\exfiltrap\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
-; The Tauri desktop shell, shipped as ExFilTrap.exe. Guarded by the
+; The Tauri desktop shell, shipped as {#ShellExeName}. Guarded by the
 ; compile-time HaveShell check above — no skipifsourcedoesntexist, so a
 ; missing shell can never silently produce a half-broken install again.
 #ifdef HaveShell
-Source: "{#ShellRel}"; DestDir: "{app}"; DestName: "ExFilTrap.exe"; \
+Source: "{#ShellRel}"; DestDir: "{app}"; DestName: "{#ShellExeName}"; \
     Flags: ignoreversion
 #endif
 ; Place the Npcap redist next to this script as npcap.exe:
@@ -118,9 +125,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; \
 ; documented "Start Menu -> ExFilTrap" step used to lead nowhere at all —
 ; the only thing that ever ran was the [Run] postinstall entry below.
 #ifdef HaveShell
-Name: "{group}\{#MyAppName}"; Filename: "{app}\ExFilTrap.exe"; \
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#ShellExeName}"; \
     Comment: "Open the ExFilTrap detection console"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\ExFilTrap.exe"; \
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#ShellExeName}"; \
     Tasks: desktopicon
 #else
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
@@ -137,7 +144,7 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 #ifdef HaveShell
 Root: HKLM; \
     Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\ExFilTrap.exe"; \
-    ValueType: string; ValueName: ""; ValueData: "{app}\ExFilTrap.exe"; \
+    ValueType: string; ValueName: ""; ValueData: "{app}\{#ShellExeName}"; \
     Flags: uninsdeletekey
 Root: HKLM; \
     Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\ExFilTrap.exe"; \
@@ -145,7 +152,7 @@ Root: HKLM; \
     Flags: uninsdeletekey
 Root: HKLM; \
     Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{#MyAppExeName}"; \
-    ValueType: string; ValueName: ""; ValueData: "{app}\ExFilTrap.exe"; \
+    ValueType: string; ValueName: ""; ValueData: "{app}\{#ShellExeName}"; \
     Flags: uninsdeletekey
 Root: HKLM; \
     Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{#MyAppExeName}"; \
@@ -190,7 +197,7 @@ Filename: "{app}\{#MyAppExeName}"; Parameters: "winservice start"; \
 ; Exactly one of the two branches is compiled in, so the Finished page shows
 ; a single "Launch ExFilTrap" check box.
 #ifdef HaveShell
-Filename: "{app}\ExFilTrap.exe"; Description: "Launch ExFilTrap"; \
+Filename: "{app}\{#ShellExeName}"; Description: "Launch ExFilTrap"; \
     Flags: nowait postinstall skipifsilent runasoriginaluser
 #else
 Filename: "{app}\{#MyAppExeName}"; Parameters: "dashboard"; \
