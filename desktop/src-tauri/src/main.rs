@@ -53,10 +53,17 @@ fn service_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
         // Tauri's real AppImage/deb resource layout (mainBinaryName dir):
         //   ${APPDIR}/usr/lib/ex-fil-trap/resources/exfiltrap-engine
         "resources/exfiltrap-engine/exfiltrap",
+        // Windows: the PyInstaller onedir build names the binary
+        // `exfiltrap.exe`, so every Linux candidate needs its .exe twin or
+        // the staged engine is never found on that platform.
+        "resources/exfiltrap-engine/exfiltrap.exe",
         "exfiltrap-engine/exfiltrap",
+        "exfiltrap-engine/exfiltrap.exe",
         "exfiltrap-engine",
         "exfiltrap/exfiltrap",
+        "exfiltrap/exfiltrap.exe",
         "dist/exfiltrap/exfiltrap",
+        "dist/exfiltrap/exfiltrap.exe",
     ] {
         if let Ok(p) = app
             .path()
@@ -80,16 +87,21 @@ fn service_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
 
 /// Resource directory that contains the bundled engine.
 fn engine_resource_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    // The engine binary is `exfiltrap` on Linux and `exfiltrap.exe` on
+    // Windows; accept either so one lookup serves both platforms.
+    let has_engine = |dir: &Path| {
+        dir.join("exfiltrap").exists() || dir.join("exfiltrap.exe").exists()
+    };
     for candidate in ["resources/exfiltrap-engine", "exfiltrap-engine"] {
         if let Ok(p) = app.path().resolve(candidate, BaseDirectory::Resource) {
-            if p.join("exfiltrap").exists() {
+            if has_engine(&p) {
                 return Some(p);
             }
         }
         if let Ok(exe) = std::env::current_exe() {
             if let Some(parent) = exe.parent() {
                 let p = parent.join(candidate);
-                if p.join("exfiltrap").exists() {
+                if has_engine(&p) {
                     return Some(p);
                 }
             }

@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import threading
 import time
+import webbrowser
 
 from flask import Flask, jsonify, render_template, request
 
@@ -345,13 +347,65 @@ def create_app(db_path=None, status_provider=None, sessions_provider=None,
     return app
 
 
+def _service_console_url(timeout: float = 0.8) -> str | None:
+    """URL of the LIVE service console, or ``None`` if no service answers.
+
+    The installed product runs the detection engine as a Windows Service /
+    systemd unit, and that process already serves the dashboard UI on the
+    service API port. That console is the real one — live status, sessions,
+    sinkhole control — whereas a second standalone copy started by the
+    launcher would show the same tables with no engine attached.
+
+    Only a non-standalone ``/api/status`` counts, so a stray standalone
+    dashboard on the same port can never masquerade as the service.
+    """
+    import urllib.error
+    import urllib.request
+
+    url = f"http://127.0.0.1:{config.SERVICE_API_PORT}"
+    try:
+        with urllib.request.urlopen(url + "/api/status", timeout=timeout) as resp:
+            if resp.status != 200:
+                return None
+            body = json.loads(resp.read().decode("utf-8", "replace"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    if body.get("service") == "standalone-dashboard":
+        return None
+    return url
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="exfiltrap.dashboard")
     parser.add_argument("--db", default=None, help="SQLite path")
     parser.add_argument("--host", default=config.DASHBOARD_HOST)
     parser.add_argument("--port", type=int, default=config.DASHBOARD_PORT)
+    parser.add_argument("--no-browser", action="store_true",
+                        help="serve only — never launch a browser "
+                             "(scripted / headless use)")
     args = parser.parse_args(argv)
+
+    # Launcher path (Start Menu, `exfiltrap dashboard`, the installer's
+    # postinstall step): if the engine service is up, open ITS console and
+    # exit. Without this the shortcut spawned a second, data-less UI on a
+    # different port and the browser was never opened at all — so the only
+    # thing the user saw was Flask's "Running on http://..." log line.
+    if args.db is None:
+        service = _service_console_url()
+        if service is not None:
+            print(f"ExfilTrap engine is running — opening {service}")
+            if not args.no_browser:
+                webbrowser.open(service)
+            return 0
+
     app = create_app(args.db)
+    host = "127.0.0.1" if args.host in ("0.0.0.0", "::", "") else args.host
+    url = f"http://{host}:{args.port}"
+    print(f"ExfilTrap standalone dashboard on {url}")
+    if not args.no_browser:
+        # Delayed so the browser cannot race the socket bind; Flask's own
+        # banner is printed from the serving thread.
+        threading.Timer(1.0, webbrowser.open, args=(url,)).start()
     app.run(host=args.host, port=args.port, debug=False)
     return 0
 

@@ -47,12 +47,35 @@ Terminal 2 — the desktop shell:
 Output in `src-tauri/target/release/bundle/`:
 
 * Linux: `.deb` (and `.rpm` via `--bundles rpm`).
-* Windows: `.msi` and NSIS `.exe` setup. For the full Windows product
-  (service registration + Npcap + signing) use
-  `packaging/windows/build_windows.bat`, which builds the Python service
-  and compiles `packaging/windows/exfiltrap.iss`.
+* Windows: NSIS `.exe` setup. `src-tauri/tauri.windows.conf.json` overrides
+  the bundle target and icon for Windows (`tauri.conf.json` keeps `deb` +
+  `icon.png` for Linux). For the full Windows product (service registration +
+  Npcap + signing) use `packaging/windows/build_windows.bat`, which builds
+  the Python service, runs `cargo build --release` for this shell, and
+  compiles `packaging/windows/exfiltrap.iss`.
+
+### Windows specifics
+
+`packaging/windows/exfiltrap.iss` ships this shell as **`ExFilTrap.exe`** and
+points the Start Menu entry, the optional desktop icon and the `App Paths`
+registry keys at it, so ExFilTrap launches as an application window exactly
+as it does on Linux (and `Win+R` → `exfiltrap` works, the same way `chrome`
+does). Both shortcuts are `Check`-guarded on the shell being present, so a
+build without Rust still produces a working installer that falls back to
+opening the console in a browser.
+
+Two things differ from Linux:
+
+* The shell does **not** start the engine. On Windows the installed
+  `ExFilTrapSvc` service (auto-start, SYSTEM) owns the engine, so
+  `bundle.resources` is emptied in the Windows config and the launch-time
+  auto-start path is skipped (`cfg!(not(target_os = "windows"))`).
+* `tauri-build` still validates the resource path at compile time, so
+  `build_windows.bat` stages `dist\exfiltrap` into `src-tauri\resources\`
+  before `cargo build` even though the staged copy is not shipped.
 
 Generate icons first (one-time): see `src-tauri/icons/README.md`.
+`icon.ico` (16–256 px, 7 sizes) is committed alongside the PNGs.
 
 ## Linux distribution formats
 

@@ -18,8 +18,9 @@ in section 6.
 
 **Privilege model (why you enter a password once):** packet capture and
 firewall rules need elevated rights, so the *installer/service* elevates
-once. The dashboard is always unprivileged — it only reads the local API on
-`127.0.0.1:5050`/`:5000`.
+once. The desktop app and any browser are always unprivileged readers — they
+only talk to the local API on `127.0.0.1:5050` (the standalone
+`exfiltrap dashboard` DB viewer uses `:5000`).
 
 ---
 
@@ -45,8 +46,11 @@ silently — no separate download.
    adapter at service start.
 4. Restart the service after editing:
    `exfiltrap.exe winservice stop` then `start` (elevated prompt).
-5. Open the dashboard: Start Menu → **ExFilTrap** (or any browser →
-   `http://127.0.0.1:5050`).
+5. Open the dashboard: Start Menu → **ExFilTrap**, or `Win+R` → `exfiltrap`.
+   This launches the **desktop shell** — a real application window, the
+   Windows counterpart of the Linux AppImage — which attaches to the service
+   on `127.0.0.1:5050` and switches to the dashboard as soon as the API
+   answers. Any browser can also open `http://127.0.0.1:5050` directly.
 
 **Portable alternative (no install):** unzip the `exfiltrap/` onedir build
 and run from an elevated prompt (Npcap required):
@@ -54,6 +58,17 @@ and run from an elevated prompt (Npcap required):
 
 **Verify:** `exfiltrap.exe privileges` → `can_capture: true`;
 `curl http://127.0.0.1:5050/api/status` → `"mode": "live:..."`.
+
+**Where the evidence lives:** `%PROGRAMDATA%\ExFilTrap\exfiltrap.db`. It must
+sit outside `Program Files` — SQLite WAL journaling creates `-wal`/`-shm`
+files beside the database, and `Program Files` is read-only for the
+unprivileged console.
+
+**Building the installer yourself:** `packaging\windows\build_windows.bat`
+builds the engine, the Tauri desktop shell (needs
+[Rust](https://rustup.rs); without it the shell is skipped and the Start Menu
+entry falls back to opening the console in a browser) and then the Inno Setup
+installer.
 
 **Uninstall:** Settings → Apps → ExFilTrap (stops and removes the service
 and `%PROGRAMDATA%\ExFilTrap`).

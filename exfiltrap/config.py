@@ -8,6 +8,7 @@ they were chosen as the simplest reasonable default and documented inline.
 
 from __future__ import annotations
 
+import os
 import pathlib
 
 # ---------------------------------------------------------------------------
@@ -248,7 +249,32 @@ DATA_DIR = PROJECT_ROOT / "data"
 MODEL_PATH = DATA_DIR / "model" / "rf_model.joblib"
 TRANCO_CSV = DATA_DIR / "tranco_top_1m_sample.csv"
 EVAL_RESULTS_DIR = PROJECT_ROOT / "eval" / "results"
-DB_PATH = DATA_DIR / "exfiltrap.db"
+
+
+def _default_db_path() -> pathlib.Path:
+    """Where the evidence database lives.
+
+    On Windows the packaged product installs under ``Program Files``, which
+    is read-only for the unprivileged dashboard. WAL journaling has to create
+    ``-wal``/``-shm`` siblings NEXT TO the file, so pointing at the install
+    directory made every dashboard route fail with "unable to open database
+    file" while the elevated installer had no trouble — which is why the
+    symptom only showed up for the user and never during install.
+
+    ``%PROGRAMDATA%\\ExfilTrap`` is created by the installer with
+    ``users-modify``, is the correct home for service state, and is writable
+    by both the SYSTEM service and the unprivileged console.
+    """
+    if os.name == "nt":
+        base = os.environ.get("PROGRAMDATA") or r"C:\ProgramData"
+        return pathlib.Path(base) / "ExfilTrap" / "exfiltrap.db"
+    return DATA_DIR / "exfiltrap.db"
+
+
+DB_PATH = _default_db_path()
 # ASSUMPTION: dashboard bind address/port.
 DASHBOARD_HOST = "127.0.0.1"
 DASHBOARD_PORT = 5000
+# The installed service (service.py --api-port) serves the REAL console —
+# live status, sessions, sinkhole control. The launcher prefers it.
+SERVICE_API_PORT = 5050
