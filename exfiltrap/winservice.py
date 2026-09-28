@@ -112,18 +112,31 @@ def _get_service_class():
             )
             from exfiltrap import service as svc
 
-            # The service loop reacts to the Windows stop event by raising
-            # the same SIGTERM the POSIX path uses.
+            # The service loop is stopped through svc.request_stop(), NOT by
+            # raising SIGTERM. SvcDoRun runs on a worker thread, where
+            # signal.signal() is illegal, so no handler is ever installed and
+            # raise_signal(SIGTERM) would take SIGTERM's default action: an
+            # immediate process kill that skips the hosts-file cleanup in
+            # service._request_stop. request_stop() runs that cleanup.
             import threading
+            import time
 
-            def _stop_and_signal():
+            def _stop_service():
                 win32event.WaitForSingleObject(self.stop_event, -1)
-                # Interrupt the Flask server thread with KeyboardInterrupt.
-                import signal as _signal
+                # A stop can arrive while the engine is still building its
+                # pipeline, before the hook is published. Wait briefly for it
+                # rather than leaving the service hanging on stop — but do
+                # not outlast the SCM's own stop timeout.
+                for _ in range(100):
+                    if svc.request_stop():
+                        return
+                    time.sleep(0.1)
+                log.warning(
+                    "stop requested but the service loop never published a "
+                    "shutdown hook"
+                )
 
-                _signal.raise_signal(_signal.SIGTERM)
-
-            threading.Thread(target=_stop_and_signal, daemon=True).start()
+            threading.Thread(target=_stop_service, daemon=True).start()
             svc.main(service_args())
 
     return ExfilTrapWindowsService

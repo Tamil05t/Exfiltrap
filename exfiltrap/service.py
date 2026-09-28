@@ -424,6 +424,36 @@ class SinkholeSlot:
         return self.obj.cleanup() if self.obj else 0
 
 
+# The running service loop's shutdown handler, published by main().
+#
+# Why this exists: signal.signal() is only legal in the main thread of the
+# main interpreter. pywin32's ServiceFramework.SvcRun() calls SvcDoRun() on a
+# worker thread, so the Windows service could never install the SIGINT/SIGTERM
+# handlers below — and the whole graceful shutdown (clearing every
+# exfiltrap-managed hosts entry, closing storage) hangs off that handler, so
+# simply skipping it is not an option: raising SIGTERM with no handler
+# installed takes the default action and hard-kills the process, leaving the
+# hosts file poisoned.
+#
+# So main() stores the handler here, and any host that cannot deliver signals
+# calls request_stop(). None until a service loop is actually up.
+_stop_hook = None
+
+
+def request_stop() -> bool:
+    """Drive the running service loop's graceful shutdown.
+
+    Returns False when no service loop has published a stop handler yet, or
+    when the previous one has already been cleared. The Windows service uses
+    this instead of raising SIGTERM — see the note on ``_stop_hook``.
+    """
+    hook = _stop_hook
+    if hook is None:
+        return False
+    hook(0, None)
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python3 -m exfiltrap.service",
@@ -651,8 +681,22 @@ def main(argv: list[str] | None = None) -> int:
 
         threading.Thread(target=_finalizer, daemon=True).start()
 
-    signal.signal(signal.SIGINT, _request_stop)
-    signal.signal(signal.SIGTERM, _request_stop)
+    # Publish before installing: the SCM can ask the service to stop the
+    # moment it reports RUNNING, which is well before app.run() is reached.
+    global _stop_hook
+    _stop_hook = _request_stop
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGINT, _request_stop)
+        signal.signal(signal.SIGTERM, _request_stop)
+    else:
+        # pywin32's SvcDoRun runs here. Calling signal.signal() off the main
+        # thread raised "ValueError: signal only works in main thread of the
+        # main interpreter", which killed the Windows service about four
+        # seconds after start (SCM WIN32_EXIT_CODE 1066, SERVICE_EXIT_CODE
+        # 0x20000001) and left the dashboard with nothing to talk to.
+        # request_stop() drives the same handler instead.
+        log.debug("service loop off the main thread — shutdown via "
+                  "request_stop()")
 
     feed = threading.Thread(
         target=run_capture_feed,
@@ -808,6 +852,9 @@ def main(argv: list[str] | None = None) -> int:
         stop_event.set()
         feed.join(timeout=3.0)
         storage.close()
+        # Drop the hook so a late request_stop() cannot re-run the finalizer
+        # (which ends in os._exit) against a service loop that already ended.
+        _stop_hook = None
     return 0
 
 
