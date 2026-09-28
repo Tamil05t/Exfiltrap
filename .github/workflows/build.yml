@@ -30,6 +30,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # The desktop shell is Rust. This job shipped without a Rust toolchain
+      # and without a cargo build step, so `desktop/src-tauri/target/release/
+      # exfiltrap-desktop.exe` never existed on the runner. The installer's
+      # [Files] entry for it carried `skipifsourcedoesntexist`, so the
+      # artifact silently contained only the console engine — the Windows
+      # product had no window at all, and its Start Menu entry ran
+      # `exfiltrap.exe` with no arguments, which prints the CLI help and
+      # exits. That is the console window users saw flash and vanish.
+      - uses: dtolnay/rust-toolchain@stable
       - name: Install build deps
         run: |
           pip install -r requirements.txt pyinstaller pywin32
@@ -73,12 +82,40 @@ jobs:
             }
           }
           Write-Host "OK — bundled UI at $($idx.FullName)"
+      - name: Build the Tauri desktop shell (the actual application WINDOW)
+        shell: pwsh
+        run: |
+          # This step is the whole difference between "ExFilTrap is an app"
+          # and "ExFilTrap is a console program that flashes and closes".
+          # tauri.windows.conf.json sets bundle.targets=["nsis"] and
+          # resources=[] for this platform, so it is a plain shell build;
+          # the installer then ships the exe as {app}\ExFilTrap.exe.
+          #
+          # The engine is staged into the Tauri resource dir first as
+          # insurance: build_windows.bat does the same, because tauri-build
+          # validates resource paths at compile time.
+          New-Item -ItemType Directory -Force -Path desktop/src-tauri/resources | Out-Null
+          if (Test-Path desktop/src-tauri/resources/exfiltrap-engine) {
+            Remove-Item -Recurse -Force desktop/src-tauri/resources/exfiltrap-engine
+          }
+          Copy-Item -Recurse dist/exfiltrap desktop/src-tauri/resources/exfiltrap-engine
+          cargo build --release --manifest-path desktop/src-tauri/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
+          $shell = "desktop/src-tauri/target/release/exfiltrap-desktop.exe"
+          if (-not (Test-Path $shell)) { throw "desktop shell not produced at $shell" }
+          Write-Host "OK — desktop shell at $shell ($((Get-Item $shell).Length) bytes)"
       - name: Build installer (Inno Setup)
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { $iscc = "iscc" }
+          # exfiltrap.iss degrades to an engine-only installer when the shell
+          # is absent, which is right for a local Rust-less build but must
+          # never be how a released artifact is produced.
+          if (-not (Test-Path "desktop/src-tauri/target/release/exfiltrap-desktop.exe")) {
+            throw "refusing to build the installer without the desktop shell"
+          }
           # Derive a clean numeric version. On a branch push github.ref_name
           # is "main" (not a version) — fall back to the tauri.conf version so
           # the installer never ships a garbage version string.
@@ -104,6 +141,7 @@ jobs:
           path: |
             dist/exfiltrap/
             dist/*.exe
+            desktop/src-tauri/target/release/exfiltrap-desktop.exe
           if-no-files-found: error
 
   linux-service:
