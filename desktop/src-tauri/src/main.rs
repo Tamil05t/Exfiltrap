@@ -271,7 +271,42 @@ async fn start_service(
     iface: String,
 ) -> Result<String, String> {
     if cfg!(target_os = "windows") {
-        return Err("On Windows, run as Administrator: exfiltrap.exe service --iface <adapter>\n(or install ExFilTrap-Setup.exe — the service starts automatically)".to_string());
+        // Windows has no pkexec and no polkit: the engine is a real SCM
+        // service, and only the SCM can start it — which needs the elevation
+        // this (deliberately unelevated) shell does not have. `net start` is
+        // attempted anyway, so a shell that happens to be elevated just
+        // works, and every other outcome reports the ONE recovery path that
+        // actually exists. The previous text here handed Windows users the
+        // Linux/`sudo` story and read as "the button is broken" on a machine
+        // where the service was merely not running.
+        let started = tauri::async_runtime::spawn_blocking(|| {
+            Command::new("net").arg("start").arg("ExFilTrapSvc").output()
+        })
+        .await
+        .map_err(|e| format!("join error: {e}"))?;
+        if let Ok(out) = started {
+            if out.status.success() {
+                return Ok("ExFilTrapSvc started".into());
+            }
+            // `net start` puts access-denied on stderr and service failures
+            // on stdout; check both before falling back to the generic text.
+            let mut detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            if detail.is_empty() {
+                detail = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            }
+            if !detail.is_empty() {
+                return Err(format!(
+                    "Could not start the ExFilTrapSvc service:\n{detail}\n\n\
+                     From an elevated prompt:\n    net start ExFilTrapSvc\n\
+                     If the service is not installed at all, run \
+                     ExFilTrap-Setup.exe — it installs and starts it for you."
+                ));
+            }
+        }
+        return Err("Start the service from an elevated prompt:\n    \
+                    net start ExFilTrapSvc\n\
+                    (or run ExFilTrap-Setup.exe, which installs and starts it)"
+            .to_string());
     }
     let script = build_launch_script(&app, &iface)?;
     run_pkexec(script).await?;

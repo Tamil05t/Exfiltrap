@@ -612,7 +612,20 @@ def main(argv: list[str] | None = None) -> int:
                 except OSError:
                     continue
         if not args.db:
-            args.db = config.DB_PATH
+            # os.fspath, NOT the Path itself: from here on args.db is used as
+            # a string — the warm-restart snapshot is `args.db + ".state.json"`
+            # and --fresh-db globs `args.db + "-*"`, and `WindowsPath + str`
+            # is a TypeError. The Windows service passes no --db (winservice
+            # builds argv from service.ini: only --iface/--mitigation), so it
+            # landed here on EVERY start: the service registered, logged
+            # "capture backend ready", then died ~17 s later inside SvcDoRun
+            # with `TypeError: unsupported operand type(s) for +:
+            # 'WindowsPath' and 'str'` (Application log id=3, System log 7024
+            # 0x20000001), leaving the console parked on "Waiting for the
+            # ExfilTrap detection service" with nothing on 5050. On Linux the
+            # systemd unit passes --db explicitly, so args.db was already a
+            # str there and the bug could not reproduce.
+            args.db = os.fspath(config.DB_PATH)
     if args.fresh_db:
         import glob as _glob
 
@@ -625,6 +638,10 @@ def main(argv: list[str] | None = None) -> int:
                 pass
 
     _configure_logging(args.verbose)
+    # First line of every run: where the evidence is going. The Windows
+    # service had no way to answer this from the log while its DB default
+    # silently moved from C:\var\lib\exfiltrap to %PROGRAMDATA%\ExFilTrap.
+    log.info("database: %s", args.db)
 
     if not privileges.has_capture_capability():
         print(
@@ -733,7 +750,11 @@ def main(argv: list[str] | None = None) -> int:
         log.info("canary traps armed (%d operator + %d generated): e.g. %s",
                  len(cli_canaries), len(auto_canaries), auto_canaries[0])
     # Warm restart: restore tracker/baseline state saved next to the DB.
-    state_path = (args.db or "exfiltrap.db") + ".state.json"
+    # os.fspath keeps the invariant local: this exact expression is what the
+    # Windows service died on (see the args.db default above), so a future
+    # Path-valued --db default fails here as a clear message, not a TypeError
+    # seventeen seconds into a service start.
+    state_path = os.fspath(args.db or "exfiltrap.db") + ".state.json"
     if args.iface and st_mod.load_state(pipeline.tracker, state_path):
         log.info("restored session/baseline state from %s", state_path)
     iface_label = (args.iface if isinstance(args.iface, str)
