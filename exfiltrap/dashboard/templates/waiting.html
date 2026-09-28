@@ -128,8 +128,20 @@
         } catch (e2) {}
       }
     }
+    // Poll forever, with a backoff.
+    //
+    // This loop used to stop for good after 240 ticks (6 minutes) and leave
+    // the window on "Still waiting for the detection service…" — even after
+    // 5050 came back. An uninstall/reinstall cycle is exactly that case: the
+    // uninstaller stops and deletes the service, and the new installer does
+    // not re-register and start it until setup finishes, so the service is
+    // legitimately down for a couple of minutes. A window opened before the
+    // cycle exhausted its 6 minutes during the gap and then never recovered;
+    // the only way out was the "Open dashboard now" button or a restart.
+    // A monitor for a service has to outlive the service's downtime.
     (async function poll() {
-      for (let i = 0; i < 240; i++) {
+      let waited = 0;
+      for (;;) {
         if (await up()) {
           document.getElementById('d').classList.add('up');
           document.getElementById('msg').textContent =
@@ -137,10 +149,18 @@
           setTimeout(go, 600);
           return;
         }
-        await new Promise(r => setTimeout(r, 1500));
+        waited += 1.5;
+        if (waited >= 30) {
+          // The engine takes ~25 s to answer after the service reports
+          // RUNNING (it loads the classifier first), so say something that
+          // does not look like a hang.
+          document.getElementById('msg').textContent =
+            'Still waiting for the detection service…';
+        }
+        // Back off once we are clearly in a long wait, so a window left open
+        // overnight is not hammering localhost every 1.5 s.
+        await new Promise(r => setTimeout(r, waited > 120 ? 5000 : 1500));
       }
-      document.getElementById('msg').textContent =
-        'Still waiting for the detection service…';
     })();
   </script>
 </body>
