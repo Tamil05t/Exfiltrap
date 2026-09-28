@@ -1068,9 +1068,26 @@ function renderPosture(standalone, healthy) {
   const openHigh = S.events.filter((e) => e.risk_level === "HIGH" || e.risk_level === "CONFIRMED").length;
   let cls = null, title = "", sub = "", ico = "", acts = "";
   if (!standalone && !healthy) {
-    cls = "critical"; title = "Capture degraded";
-    sub = "The engine is not reporting a healthy capture heartbeat — detections may be missing.";
-    ico = warnSvg(); acts = `<a class="btn mini" href="#/system">Inspect System</a>`;
+    // "Capture degraded" on its own is unactionable: it names the symptom,
+    // never the cause, and the obvious guess — "run it as Administrator" —
+    // cannot possibly help when the capture DRIVER is absent, which is the
+    // usual reason on Windows. The engine reports the backend's own
+    // diagnosis through /api/status, so repeat it here verbatim, with the
+    // download link, instead of leaving the operator to guess.
+    const be = (S.status && S.status.capture_backend) || null;
+    const errs = Object.values((S.status && S.status.capture_errors) || {});
+    const noDriver = !!(be && be.ok === false);
+    cls = "critical";
+    title = noDriver ? "Capture driver unavailable" : "Capture degraded";
+    sub = noDriver
+        ? be.reason.charAt(0).toUpperCase() + be.reason.slice(1) + ". " + be.remedy
+        : "The engine is not reporting a healthy capture heartbeat — detections may be missing."
+          + (errs.length ? " Last error: " + errs[0] : "");
+    ico = warnSvg();
+    acts = `<a class="btn mini" href="#/system">Inspect System</a>`
+         + (noDriver && be.url
+            ? ` <a class="btn mini" target="_blank" rel="noreferrer" href="${be.url}">Get Npcap</a>`
+            : "");
   } else if (conf > 0) {
     cls = "critical"; title = `${conf} confirmed exfiltration decode${conf === 1 ? "" : "s"}`;
     sub = "Decoded payloads present in the evidence log. Automated response may already have fired.";
@@ -1757,11 +1774,23 @@ function clearSinks() {
    ================================================================ */
 function renderSystemView(s, standalone) {
   const ifaces = Object.entries((s && s.capture_ifaces) || {});
+  // A silent interface is only diagnosable with the reason the supervisor
+  // recorded when the (re)spawn failed — otherwise the card says "SILENT"
+  // and the operator has nowhere to go from there.
+  const cerr = (s && s.capture_errors) || {};
+  const be = (s && s.capture_backend) || null;
+  const backendRows = (be && be.ok === false)
+    ? `<dt>capture backend</dt><dd style="color:var(--bad)">${esc(be.reason)}</dd>
+       <dt>how to fix it</dt><dd>${esc(be.remedy)}${
+         be.url ? ` <a href="${be.url}" target="_blank" rel="noreferrer">${esc(be.url)}</a>` : ""}</dd>`
+    : "";
   $("svc-capture").innerHTML =
     (ifaces.length ? ifaces.map(([i, v]) => `<dt>${esc(i)}</dt>
       <dd style="color:${v.ok ? "var(--ok)" : "var(--bad)"}">${v.ok
-        ? `alive · ${v.age_s}s heartbeat` : "SILENT — restart the engine"}</dd>`).join("")
+        ? `alive · ${v.age_s}s heartbeat`
+        : "SILENT — " + (cerr[i] ? esc(cerr[i]) : "restart the engine")}</dd>`).join("")
       : `<dt>capture</dt><dd class="faint">standalone dashboard — no live capture</dd>`) +
+    backendRows +
     `<dt>processed</dt><dd>${nfmt(s && s.queries_processed)} queries this session</dd>
      <dt>watchdog</dt><dd>${s && s.notify_socket ? "systemd sd_notify · active" : "not under systemd"}</dd>`;
   // /api/status reports `is_root` at the TOP level and the capability set

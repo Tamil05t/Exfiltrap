@@ -2,7 +2,8 @@
 ;
 ; One elevated moment (the UAC prompt of this installer), then everything
 ; runs like a normal application:
-;   - installs to Program Files
+;   - installs to Program Files (x86)\ExfilTrap — the installer is 32-bit, so
+;     {autopf} resolves to the x86 tree, not "C:\Program Files"
 ;   - silently installs the Npcap redistributable if absent (scapy's
 ;     capture driver on Windows; same driver Wireshark uses)
 ;   - writes %PROGRAMDATA%\ExfilTrap\service.ini
@@ -15,11 +16,29 @@
 ; -wal/-shm siblings next to the file, and Program Files is read-only for
 ; the unprivileged console.
 ;
-; The Npcap installer must be placed next to this script as npcap.exe
-; before compiling (download the "Installer for Windows" from
-; https://npcap.com/#download — redistribution requires their
-; OEM/special installer license; for a college deployment the normal
-; free installer also works interactively).
+; Npcap is the packet-capture driver scapy needs on Windows (the same driver
+; Wireshark uses) and the engine cannot see a single DNS query without it.
+;
+; TWO separate facts, both learned the hard way:
+;
+; 1. The FREE Npcap installer REFUSES to install silently. Running it with
+;    "/S" pops a dialog reading "Silent installation is only supported in
+;    Npcap OEM. Please run the installer normally." and then does nothing.
+;    Only the licensed Npcap OEM build supports unattended install, so this
+;    script must never present the driver as something setup quietly takes
+;    care of — it either ships an OEM build (drop it here as npcap.exe) or it
+;    tells the user to install Npcap themselves.
+; 2. It is NOT bundled by default: redistributing the free installer
+;    requires Npcap's OEM/special licence. Drop an OEM (or otherwise
+;    redistributable) npcap.exe next to this script to bundle it — see
+;    HaveNpcap below.
+;
+; What the user sees when the driver is missing is a console that opens
+; normally and then sits on "Capture degraded" forever, with no explanation
+; anywhere: the service has no console, so the engine's own log lines went
+; nowhere. Running the app as Administrator does not help — the driver is
+; missing, so there is nothing to elevate. Hence the message box at the end
+; of setup (CurStepChanged) and the honest banner in the console.
 
 #define MyAppName "ExfilTrap"
 ; Version is overridable from the command line (CI passes the pushed tag):
@@ -63,6 +82,19 @@
   #pragma warning "ExFilTrap: Tauri shell not built (desktop\src-tauri\target\release\exfiltrap-desktop.exe missing) - producing an ENGINE-ONLY installer; the Start Menu entry will run `exfiltrap dashboard`."
 #endif
 
+; Is a redistributable Npcap installer sitting next to this script?
+;
+; Also a COMPILE-time question, for exactly the reason HaveShell is: the
+; [Files]/[Run] entries for it carried skipifsourcedoesntexist and
+; skipifdoesntexist, so with no npcap.exe staged the whole driver install was
+; a silent no-op. Setup reported success, the product shipped without the one
+; driver it cannot work without, and the user was left staring at "Capture
+; degraded" with nothing anywhere to explain it.
+#define NpcapRel "npcap.exe"
+#if FileExists(AddBackslash(SourcePath) + NpcapRel)
+  #define HaveNpcap
+#endif
+
 [Setup]
 AppId={{77C5661C-BBB1-4A21-902F-6EF86D4E7F32}
 AppName={#MyAppName}
@@ -99,8 +131,14 @@ Source: "..\..\dist\exfiltrap\*"; DestDir: "{app}"; Flags: recursesubdirs ignore
 Source: "{#ShellRel}"; DestDir: "{app}"; DestName: "{#ShellExeName}"; \
     Flags: ignoreversion
 #endif
-; Place the Npcap redist next to this script as npcap.exe:
-Source: "npcap.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall skipifsourcedoesntexist external
+; A redistributable Npcap installer, when the maintainer supplied one. It is
+; embedded in setup rather than read from disk at install time (no `external`
+; flag): only compiled in when it actually exists, so setup can never again
+; claim to install a driver it does not carry.
+#ifdef HaveNpcap
+Source: "{#NpcapRel}"; DestDir: "{tmp}"; DestName: "npcap.exe"; \
+    Flags: deleteafterinstall ignoreversion
+#endif
 
 [Dirs]
 Name: "{commonappdata}\ExfilTrap"; Permissions: users-modify
@@ -179,9 +217,16 @@ Filename: "{commonappdata}\ExfilTrap\service.ini"; Section: "service"; \
     Key: "mitigation"; String: "log"
 
 [Run]
-; Npcap silent install (skip WinPcap compatibility mode) if no driver yet.
+; Install the bundled capture driver if the machine has none.
+;
+; "/S" is only honoured by the licensed Npcap OEM build — the free installer
+; answers it with "Silent installation is only supported in Npcap OEM" and
+; exits without installing anything. That is why bundling is opt-in and why
+; the message box in CurStepChanged exists for the default (unbundled) case.
+#ifdef HaveNpcap
 Filename: "{tmp}\npcap.exe"; Parameters: "/S /winpcap_mode=no"; \
     Flags: skipifdoesntexist runhidden; Check: NpcapMissing
+#endif
 ; Register + start the detection service (SYSTEM context, auto-start).
 Filename: "{app}\{#MyAppExeName}"; Parameters: "winservice install"; \
     Flags: runhidden
@@ -204,6 +249,13 @@ Filename: "{app}\{#MyAppExeName}"; Parameters: "dashboard"; \
     Description: "Launch ExFilTrap"; \
     Flags: nowait postinstall skipifsilent runasoriginaluser
 #endif
+; No capture driver and none bundled: leave the fix one click away. The Check
+; is evaluated while the Finished page is built — i.e. AFTER the [Run]
+; entries above — so it is still correct when a bundled installer just ran
+; and failed.
+Filename: "https://npcap.com/#download"; \
+    Description: "Download Npcap (required before capture can work)"; \
+    Flags: shellexec nowait postinstall skipifsilent; Check: NpcapMissing
 
 [UninstallRun]
 Filename: "{app}\{#MyAppExeName}"; Parameters: "winservice stop"; Flags: runhidden; RunOnceId: "StopSvc"
@@ -216,6 +268,34 @@ Type: filesandordirs; Name: "{commonappdata}\ExfilTrap"
 function NpcapMissing(): Boolean;
 begin
   Result := not DirExists(ExpandConstant('{sys}') + '\Npcap');
+end;
+
+// Say the capture driver out loud.
+//
+// Setup used to complete "successfully" on a machine with no Npcap, and the
+// only symptom was a console that opened and then sat on "Capture degraded"
+// forever — no error, no hint, nothing in any log. The engine cannot see a
+// single DNS query without this driver, so a setup that stays quiet about its
+// absence hands the user a product that looks broken.
+//
+// ssDone, not ssPostInstall: the [Run] section (including a bundled Npcap
+// installer) has already been processed by then, so NpcapMissing() reports
+// the truth rather than "not installed yet".
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if (CurStep = ssDone) and (not WizardSilent) and NpcapMissing() then
+    MsgBox(
+      'ExFilTrap is installed, but its packet-capture driver (Npcap) is not.'
+      + #13#10 + #13#10
+      + 'Npcap is the driver Wireshark also uses. Without it the detection '
+      + 'engine cannot see any DNS traffic, so the console will open and '
+      + 'then stay on "Capture degraded" — and running ExFilTrap as '
+      + 'Administrator will not change that, because the driver itself is '
+      + 'what is missing.' + #13#10 + #13#10
+      + 'Download and install the free Npcap installer from:'
+      + #13#10 + '    https://npcap.com/#download' + #13#10 + #13#10
+      + 'Then restart the ExFilTrap service, or simply reboot.',
+      mbInformation, MB_OK);
 end;
 
 // There is deliberately no ShellBuilt()/ShellMissing() here any more.
