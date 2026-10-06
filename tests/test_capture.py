@@ -6,7 +6,12 @@ import queue
 import pytest
 from scapy.all import DNS, DNSQR, DNSRR, IP, IPv6, TCP, UDP
 
-from exfiltrap.capture import _push, packet_to_query, packet_to_response
+from exfiltrap.capture import (
+    _push,
+    capture_backend,
+    packet_to_query,
+    packet_to_response,
+)
 
 
 def dns_query_packet(qname="abc.tunnel.example", src="10.99.0.2"):
@@ -206,3 +211,82 @@ class TestDuplicateFilter:
             ded.is_duplicate(DNSQuery("h", f"x{i}.example", 1000.0 + i))
         # the first key was evicted by the LRU bound: re-admitted
         assert ded.is_duplicate(DNSQuery("h", "x0.example", 1000.0)) is False
+
+
+class TestCaptureBackend:
+    """``capture_backend()`` must not cry wolf on a platform that is fine.
+
+    The bug this guards: on Linux scapy's default backend is a raw AF_PACKET
+    socket, so ``conf.use_pcap`` is False *by design* — scapy turns it on only
+    for Windows and Solaris. Reporting that as "capture cannot start" put a red
+    "capture driver unavailable" banner on a sensor that was demonstrably
+    capturing. Measured live with that banner on screen: queries_processed
+    1280, and capture_ifaces {enp18s0f4u1: ok, 0.2 s} / {lo: ok, 0.2 s}.
+    """
+
+    @staticmethod
+    def _conf(monkeypatch, use_pcap=False, use_bpf=False):
+        """Replace ``scapy.config.conf`` with a stub.
+
+        ``capture_backend`` does ``from scapy.config import conf`` at call
+        time, so patching the module attribute is enough — and it avoids
+        assigning ``conf.use_pcap`` for real, which would make scapy try to
+        load libpcap as a side effect.
+        """
+        import scapy.config
+
+        class _StubConf:
+            pass
+
+        stub = _StubConf()
+        stub.use_pcap = use_pcap
+        stub.use_bpf = use_bpf
+        monkeypatch.setattr(scapy.config, "conf", stub)
+
+    def test_posix_raw_sockets_is_ok(self, monkeypatch):
+        self._conf(monkeypatch, use_pcap=False)
+        monkeypatch.setattr(os, "name", "posix")
+        be = capture_backend()
+        assert be["ok"] is True
+        assert be["provider"] == "raw sockets (AF_PACKET)"
+        assert be["reason"] == ""
+        assert be["remedy"] == ""
+
+    def test_posix_bpf_is_ok(self, monkeypatch):
+        self._conf(monkeypatch, use_pcap=False, use_bpf=True)
+        monkeypatch.setattr(os, "name", "posix")
+        be = capture_backend()
+        assert be["ok"] is True
+        assert be["provider"] == "BPF"
+
+    def test_libpcap_loaded_is_ok(self, monkeypatch):
+        self._conf(monkeypatch, use_pcap=True)
+        monkeypatch.setattr(os, "name", "nt")
+        be = capture_backend()
+        assert be["ok"] is True
+        assert be["provider"] == "libpcap/npcap"
+
+    def test_windows_without_npcap_is_not_ok(self, monkeypatch):
+        self._conf(monkeypatch, use_pcap=False)
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setattr("exfiltrap.capture._pcap_driver_present",
+                            lambda: False)
+        be = capture_backend()
+        assert be["ok"] is False
+        assert "Npcap" in be["reason"]
+        assert be["url"]          # the download link is the actionable part
+
+    def test_windows_with_damaged_driver_is_not_ok(self, monkeypatch):
+        self._conf(monkeypatch, use_pcap=False)
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setattr("exfiltrap.capture._pcap_driver_present",
+                            lambda: True)
+        be = capture_backend()
+        assert be["ok"] is False
+        assert "damaged" in be["reason"]
+
+    def test_unexpected_platform_is_not_ok(self, monkeypatch):
+        self._conf(monkeypatch, use_pcap=False)
+        monkeypatch.setattr(os, "name", "java")
+        be = capture_backend()
+        assert be["ok"] is False

@@ -90,12 +90,30 @@ def capture_backend() -> dict:
         return {"ok": False, "provider": None, "reason": reason,
                 "remedy": remedy, "url": NPCAP_DOWNLOAD_URL}
 
+    # POSIX: scapy's default backend here is a raw AF_PACKET socket, NOT
+    # libpcap. scapy sets conf.use_pcap = True only on Windows
+    # (scapy/arch/windows/__init__.py) and Solaris (scapy/arch/solaris.py), so
+    # on Linux a False here is the NORMAL state and means nothing is wrong.
+    # Reporting it as "capture cannot start" put a red "capture driver
+    # unavailable" banner on a Linux sensor that was demonstrably capturing —
+    # measured with that banner on screen: queries_processed 1280 and
+    # capture_ifaces {enp18s0f4u1: ok, age 0.2 s}, {lo: ok, age 0.2 s}. This
+    # same file already depends on the raw path (make_deduper documents
+    # AF_PACKET double-delivery on loopback). Genuine POSIX capture failures
+    # are permission errors (no CAP_NET_RAW) and already surface through
+    # capture_ifaces[*].ok / capture_errors, so this route must not claim to
+    # diagnose them.
+    if os.name == "posix":
+        provider = ("BPF" if getattr(conf, "use_bpf", False)
+                    else "raw sockets (AF_PACKET)")
+        return {"ok": True, "provider": provider,
+                "reason": "", "remedy": "", "url": ""}
+
     return {
         "ok": False,
         "provider": None,
-        "reason": ("scapy loaded no libpcap provider, so capture cannot start"),
-        "remedy": ("Install libpcap (Debian/Ubuntu: apt install libpcap0.8; "
-                   "Arch: pacman -S libpcap) and restart the service."),
+        "reason": "scapy reported no packet-capture backend on this platform",
+        "remedy": "Report this with your OS and Python version.",
         "url": "",
     }
 
