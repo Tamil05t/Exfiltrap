@@ -1279,6 +1279,16 @@ function renderTopSources() {
 function signalsHtml(e) {
   const r = e.reasons || "";
   const out = [];
+  // Scope FIRST. A MASS/slow-drip verdict is a property of the SOURCE session,
+  // not of the domain in the Query column — without this the table reads as
+  // "this domain was flagged". Measured 2026-10-06: all 8 rows in risk_events
+  // were popular domains that merely happened to be the queries in flight when
+  // the session's entropy-weighted-mass gate opened.
+  if (/domain-level signal/i.test(r)) {
+    out.push('<span class="tag src" title="scoped to this base domain">DOMAIN</span>');
+  } else if (/slow-drip|mass|beacon regularity/i.test(r)) {
+    out.push('<span class="tag src" title="scoped to the SOURCE IP session, not the domain in this row">SESSION</span>');
+  }
   if (/canary/i.test(r)) out.push('<span class="tag canary">CANARY</span>');
   if (/velocity/i.test(r)) out.push('<span class="flag vel">VELOCITY</span>');
   if (/beacon/i.test(r)) out.push('<span class="flag beacon">BEACON</span>');

@@ -287,14 +287,16 @@ def _push(event, out_queue: queue.Queue) -> None:
 
 
 def make_deduper() -> "DuplicateFilter":
-    """Build a capture-path duplicate filter (one per capture feed).
+    """Build a capture-path duplicate filter (**one per capture feed**).
 
-    AF_PACKET on loopback delivers EVERY packet twice (once as the
-    outgoing copy, once as the incoming copy — observed live: 88 DNS
-    queries produced 176 stored rows). Doubled queries destroy the
-    inter-arrival statistics the beacon detector lives on (gaps alternate
-    0.0 s / 5.5 s → CV ≈ 1) and inflate every per-source count. The filter
-    drops an event identical to one seen within the last few seconds.
+    AF_PACKET delivers the same frame twice (TX + RX copy) on loopback and on
+    wireless interfaces — observed live: 88 DNS queries produced 176 stored
+    rows. Doubled queries destroy the inter-arrival statistics the beacon
+    detector lives on (gaps alternate 0.0 s / 5.5 s → CV ≈ 1) and inflate
+    every per-source count.
+
+    Build ONE of these per feed and pass it to every ``make_sniffer`` call of
+    that feed; one per sniffer leaves cross-interface echoes unfiltered.
     """
     return DuplicateFilter()
 
@@ -303,36 +305,50 @@ class DuplicateFilter:
     """Content+time keyed sliding window of recently seen capture events."""
 
     _MAX_KEYS = 512
+    # Two copies of ONE captured frame (the AF_PACKET TX+RX echo) are tens of
+    # microseconds apart. The key used to round the timestamp into 10 ms
+    # buckets, which only collides when both copies land in the same slot: a
+    # pair straddling a boundary (…x.0049 / …x.0051) produced two keys and both
+    # rows were stored. Measured on this host (2026-10-06): 213 near-pairs in
+    # 826 rows, median delta 203 us, min 0 us — and every www.workbuddy.ai
+    # lookup was stored twice. Comparing against the last time the key was
+    # admitted is boundary-free.
+    # 50 ms is far below a genuine retransmission (resolvers back off >=1 s, see
+    # TestDuplicateFilter::test_distinct_events_kept) and far above the echo
+    # jitter, so nothing real is discarded.
+    _ECHO_WINDOW_S = 0.05
 
     def __init__(self) -> None:
         import collections
 
-        self._recent: collections.OrderedDict[tuple, None] = \
+        # key -> the timestamp it was last admitted
+        self._recent: collections.OrderedDict[tuple, float] = \
             collections.OrderedDict()
         self._lock = threading.Lock()
 
     def is_duplicate(self, event) -> bool:
-        """True when this exact event was already admitted (loopback echo).
+        """True when this exact event was already admitted (frame echo).
 
-        The key is (event type, source, qname, timestamp at 10 ms
-        resolution) — two genuine different queries never collide; the two
-        copies of one loopback packet always do.
+        The key is (event type, source, qname, qtype, sport) plus a time
+        comparison — two genuine different queries never collide; the two
+        copies of one captured frame always do.
         """
         ts = getattr(event, "timestamp", None)
         if ts is None:
             return False
+        ts = float(ts)
         # qtype + sport in the key: a normal getaddrinfo lookup sends an A
         # and an AAAA query back-to-back with the SAME qname well inside the
-        # 10 ms window — keying on name alone silently discarded the AAAA.
+        # echo window — keying on name alone silently discarded the AAAA.
         key = (type(event).__name__, getattr(event, "src_ip", None),
                getattr(event, "client_ip", None),
                getattr(event, "qname", None),
-               getattr(event, "qtype", 0), getattr(event, "sport", 0),
-               round(float(ts), 2))
+               getattr(event, "qtype", 0), getattr(event, "sport", 0))
         with self._lock:
-            if key in self._recent:
+            last = self._recent.get(key)
+            if last is not None and abs(ts - last) <= self._ECHO_WINDOW_S:
                 return True
-            self._recent[key] = None
+            self._recent[key] = ts
             self._recent.move_to_end(key)
             while len(self._recent) > self._MAX_KEYS:
                 self._recent.popitem(last=False)
@@ -346,13 +362,22 @@ def _classify(pkt, iface: str = ""):
 
 def make_sniffer(iface: str | list[str],
                  out_queue: queue.Queue,
-                 dedup: bool = True) -> AsyncSniffer:
+                 dedup: bool = True,
+                 deduper: "DuplicateFilter | None" = None) -> AsyncSniffer:
     """Build (do not start) an async sniffer feeding the queue.
 
-    ``dedup=True`` (default) drops loopback TX/RX echo duplicates before
-    they reach the pipeline — see DuplicateFilter.
+    ``dedup=True`` (default) drops TX/RX echo duplicates before they reach
+    the pipeline — see DuplicateFilter.
+
+    Pass ``deduper`` to SHARE one filter across every interface of a capture
+    feed. That is the wiring the docstring of ``make_deduper`` has always
+    described ("one per capture feed"); building one per sniffer instead meant
+    a frame seen by two interfaces was admitted once per interface. Measured
+    on this host (2026-10-06): 213 near-identical pairs in 826 rows, median
+    delta 203 us. The class is lock-protected precisely so it can be shared.
     """
-    deduper = make_deduper() if dedup else None
+    if deduper is None:
+        deduper = make_deduper() if dedup else None
     # A single-name iface tags every event with itself; 'any' or a list
     # cannot attribute the interface per packet, so events stay untagged.
     iface_tag = iface if isinstance(iface, str) and iface != "any" else ""

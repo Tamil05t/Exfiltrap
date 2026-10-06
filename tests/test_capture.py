@@ -212,6 +212,71 @@ class TestDuplicateFilter:
         # the first key was evicted by the LRU bound: re-admitted
         assert ded.is_duplicate(DNSQuery("h", "x0.example", 1000.0)) is False
 
+    def test_sub_millisecond_echo_dropped(self):
+        # The real defect. Two copies of ONE frame are tens of MICROSECONDS
+        # apart — measured on this host: 213 near-pairs in 826 rows, median
+        # delta 203 us, min 0 us. 26 us below is the exact delta between the
+        # two stored www.workbuddy.ai rows at 16:33:23.
+        from exfiltrap.capture import DuplicateFilter
+        from exfiltrap.events import DNSQuery
+
+        ded = DuplicateFilter()
+        t = 1791284603.062714
+        a = DNSQuery("10.94.139.7", "www.workbuddy.ai", t, qtype=1, sport=40000)
+        b = DNSQuery("10.94.139.7", "www.workbuddy.ai", t + 0.000026,
+                     qtype=1, sport=40000)
+        assert ded.is_duplicate(a) is False
+        assert ded.is_duplicate(b) is True
+
+    def test_bucket_boundary_echo_dropped(self):
+        # The case a 10 ms rounding bucket structurally cannot catch: two
+        # copies straddling a boundary got two different keys, so both were
+        # stored even though they are 0.2 ms apart.
+        from exfiltrap.capture import DuplicateFilter
+        from exfiltrap.events import DNSQuery
+
+        assert round(1000.0049, 2) != round(1000.0051, 2)   # old key differed
+        ded = DuplicateFilter()
+        a = DNSQuery("10.94.139.7", "www.workbuddy.ai", 1000.0049,
+                     qtype=1, sport=40000)
+        b = DNSQuery("10.94.139.7", "www.workbuddy.ai", 1000.0051,
+                     qtype=1, sport=40000)
+        assert ded.is_duplicate(a) is False
+        assert ded.is_duplicate(b) is True
+
+    def test_real_retransmission_beyond_window_kept(self):
+        # The 50 ms window must not swallow a genuine retransmission.
+        from exfiltrap.capture import DuplicateFilter
+        from exfiltrap.events import DNSQuery
+
+        ded = DuplicateFilter()
+        a = DNSQuery("10.94.139.7", "www.workbuddy.ai", 1000.0,
+                     qtype=1, sport=40000)
+        b = DNSQuery("10.94.139.7", "www.workbuddy.ai", 1000.2,
+                     qtype=1, sport=40000)
+        assert ded.is_duplicate(a) is False
+        assert ded.is_duplicate(b) is False
+
+    def test_one_filter_is_shared_across_interfaces(self):
+        # A feed builds ONE filter and hands it to every interface's sniffer.
+        # With a filter per sniffer the same frame was admitted once per
+        # interface, which is how the duplicates reached the database.
+        # scapy's AsyncSniffer keeps the callbacks it was built with in
+        # ``.kwargs`` (there is no ``.opts``).
+        import queue as _queue
+
+        from exfiltrap.capture import make_deduper, make_sniffer
+
+        ded = make_deduper()
+        out = _queue.Queue()
+        s1 = make_sniffer("lo", out, deduper=ded)
+        s2 = make_sniffer("lo", out, deduper=ded)
+        pkt = dns_query_packet(qname="dup.example", src="10.0.0.5")
+        s1.kwargs["prn"](pkt)
+        s2.kwargs["prn"](pkt)
+        assert out.qsize() == 1, \
+            "one frame seen by two sniffers of a feed must be stored once"
+
 
 class TestCaptureBackend:
     """``capture_backend()`` must not cry wolf on a platform that is fine.

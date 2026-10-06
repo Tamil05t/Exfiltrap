@@ -362,11 +362,17 @@ def run_capture_feed(pipeline: ExfilTrapPipeline, runtime: ServiceRuntime,
 
     out_queue: queue.Queue = queue.Queue()
     ifaces = iface if isinstance(iface, list) else [iface]
+    # ONE duplicate filter for the whole feed, shared by every interface's
+    # sniffer. The filter is lock-protected for exactly this, and building one
+    # per sniffer let a frame seen by two interfaces through twice — measured
+    # 2026-10-06: 213 near-identical pairs in 826 rows, every www.workbuddy.ai
+    # lookup stored twice.
+    deduper = capture.make_deduper()
 
     def _spawn_running(name: str):
         """Factory contract: return an already-STARTED sniffer — the
         supervisor only checks liveness and replaces dead instances."""
-        sniffer = capture.make_sniffer(name, out_queue)
+        sniffer = capture.make_sniffer(name, out_queue, deduper=deduper)
         sniffer.start()
         return sniffer
 
