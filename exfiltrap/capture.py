@@ -161,6 +161,30 @@ def _answer_ips(dns) -> tuple[str, ...]:
     return tuple(ips)
 
 
+def _ip_layer(pkt):
+    """The packet's IP layer, IPv4 or IPv6 — None when it carries neither.
+
+    This must not be ``pkt[IP]``: scapy's ``IP`` is the **IPv4** layer, so a
+    parser that asks for it silently returns None for every IPv6 packet and
+    the sensor goes blind to half the internet. That is not hypothetical on
+    a dual-stack host — measured on this machine, systemd-resolved held
+    established UDP/53 sockets to ``[2620:fe::9]:53`` (Quad9 over IPv6)
+    while the sensor recorded only IPv4 rows. An IPv6-only resolver is
+    entirely invisible to an IPv4-only parser.
+
+    IPv4 and IPv6 differ only in the address fields here: both expose
+    ``src``/``dst`` and both carry the same UDP/TCP layer (with the same
+    ``sport`` shortcut), so one accessor serves both families.
+    """
+    if IP in pkt:
+        return pkt[IP]
+    from scapy.all import IPv6
+
+    if IPv6 in pkt:
+        return pkt[IPv6]
+    return None
+
+
 def packet_to_query(pkt, iface: str = "") -> DNSQuery | None:
     """Pure scapy-packet -> DNSQuery conversion; None for anything else.
 
@@ -169,11 +193,11 @@ def packet_to_query(pkt, iface: str = "") -> DNSQuery | None:
     """
     try:
         dns = _dns_layer(pkt)
-        if dns is None or IP not in pkt:
+        ip = _ip_layer(pkt)
+        if dns is None or ip is None:
             return None
         if dns.qr != 0 or dns.qd is None:
             return None
-        ip = pkt[IP]
         sport = int(getattr(ip, "sport", 0) or 0)
         from exfiltrap import procattr
 
@@ -204,7 +228,8 @@ def packet_to_response(pkt, iface: str = "") -> DNSResponse | None:
     """
     try:
         dns = _dns_layer(pkt)
-        if dns is None or IP not in pkt:
+        ip = _ip_layer(pkt)
+        if dns is None or ip is None:
             return None
         if dns.qr != 1 or dns.qd is None:
             return None
@@ -224,13 +249,13 @@ def packet_to_response(pkt, iface: str = "") -> DNSResponse | None:
         from exfiltrap.features import shannon_entropy
 
         return DNSResponse(
-            client_ip=pkt[IP].dst,
+            client_ip=ip.dst,
             qname=qname,
             timestamp=float(pkt.time),
             answer_count=count,
             answer_bytes=len(blob),
             answer_entropy=shannon_entropy(blob.decode("latin-1")),
-            resolver_ip=pkt[IP].src,
+            resolver_ip=ip.src,
             answer_ips=_answer_ips(dns),
             rcode=int(dns.rcode),
         )

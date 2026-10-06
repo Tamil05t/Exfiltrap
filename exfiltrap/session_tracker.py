@@ -176,6 +176,22 @@ class SessionTracker:
             hex_label = (len(label) >= 8 and len(label) <= 32
                          and all(c in "0123456789abcdef" for c in label))
             bd = base_domain(qname)
+            # The popularity guard belongs to the WHOLE domain-velocity
+            # signal, not just to its cardinality path. A browser mints 20+
+            # distinct subdomains of one popular base domain inside a single
+            # second, so "many queries to one base domain" is simply FALSE
+            # as a suspicion signal for popular infrastructure: refreshing a
+            # Gmail tab flagged clients4.google.com and
+            # encrypted-tbn0.gstatic.com HIGH (13 false HIGHs in 180 queries,
+            # measured), and every one of them came from the entropy path —
+            # the only branch that never asked whether the domain was
+            # popular. The cardinality path has always asked; the two
+            # branches disagreeing was the bug, and the guard is the same
+            # one the response channel already applies ("popular domains
+            # never flag").
+            from exfiltrap import reputation as _rep
+
+            popular_bd = _rep.is_popular(bd)
             dq2 = self._domain_times.setdefault((src_ip, bd), deque())
             # keep the full session window: velocity counts the last 60s,
             # the beacon test spans the whole session
@@ -193,7 +209,8 @@ class SessionTracker:
                            if t > timestamp - config.DOMAIN_VELOCITY_WINDOW]
             # entropy path: many high-entropy labels in a short window
             if (len(recent) >= config.DOMAIN_VELOCITY_COUNT
-                    and entropy >= config.DOMAIN_VELOCITY_MIN_ENTROPY):
+                    and entropy >= config.DOMAIN_VELOCITY_MIN_ENTROPY
+                    and not popular_bd):
                 velocity_flag = True
             # cardinality path (ibHH, Akamai NDSS'24): many DISTINCT labels
             # under one base domain at volume is the exfil signature even
@@ -201,11 +218,9 @@ class SessionTracker:
             if (not velocity_flag
                     and len(recent) >= config.DOMAIN_VELOCITY_UNIQUE_LABELS
                     and len({h for (_t, _q, _e, h, _x) in recent_full})
-                    >= config.DOMAIN_VELOCITY_UNIQUE_LABELS):
-                from exfiltrap import reputation as _rep
-
-                if not _rep.is_popular(bd):
-                    velocity_flag = True
+                    >= config.DOMAIN_VELOCITY_UNIQUE_LABELS
+                    and not popular_bd):
+                velocity_flag = True
             # qtype-mix path (tunnel-tool survey: dnscat2 -> TXT/CNAME/MX,
             # iodine -> NULL/PRIVATE): a base domain whose recent queries
             # are dominated by tunnel-favored types. Per-domain RATIO —

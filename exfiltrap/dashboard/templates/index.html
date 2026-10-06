@@ -602,6 +602,7 @@ select.inp { cursor:pointer; }
         <div class="controls">
           <div class="seg" id="triage-mode">
             <button data-mode="events" class="on">Events</button>
+            <button data-mode="queries">Queries</button>
             <button data-mode="sources">Sources</button>
           </div>
           <div class="grow"></div>
@@ -641,6 +642,23 @@ select.inp { cursor:pointer; }
               <div class="empty-state"><b>No event selected</b>
                 <span>Pick a row to see decoded payload, ATT&amp;CK mapping and detection reasons.</span></div>
             </div>
+          </div>
+        </div>
+
+        <div id="triage-queries" style="display:none">
+          <div class="card">
+            <div class="tbl-wrap" style="max-height:calc(100dvh - 236px)">
+              <table class="tbl" id="queries-table"><thead><tr>
+                <th style="width:92px">Time</th>
+                <th>Query</th>
+                <th style="width:130px">Source</th>
+                <th style="width:124px">Verdict</th>
+                <th style="width:86px">RF prob</th>
+                <th>Resolver</th><th style="width:120px">Process</th>
+              </tr></thead><tbody></tbody></table>
+            </div>
+            <div style="padding:7px 14px;border-top:1px solid var(--border-soft);
+                        font-size:11px;color:var(--faint)" id="queries-count"></div>
           </div>
         </div>
 
@@ -997,7 +1015,7 @@ function applyDensity() {
    ================================================================ */
 const TITLES = {
   overview: ["Security Overview", "Live DNS tunnelling & exfiltration surveillance"],
-  triage:   ["Triage", "Every query and verdict with full attribution"],
+  triage:   ["Triage", "Alerts, every query, and per-source state"],
   response: ["Response", "The automated-response ledger, traps and policy"],
   system:   ["System & Health", "Capture, engine, privileges and policy state"],
   about:    ["About ExfilTrap", "Stateful DNS exfiltration defence"],
@@ -1134,7 +1152,7 @@ function renderKpis() {
   const clean = q ? (100 * (1 - fl / q)).toFixed(2) + "%" : "–";
   const last = (S.stats && S.stats.timeseries || []).slice(-1)[0];
   const cards = [
-    { k: "Queries", v: nfmt(q), d: last ? `<span class="up">+${last.queries}</span> last min` : "awaiting traffic", go: "#/triage/events", tone: "" },
+    { k: "Queries", v: nfmt(q), d: last ? `<span class="up">+${last.queries}</span> last min` : "awaiting traffic", go: "#/triage/queries", tone: "" },
     { k: "Flagged", v: nfmt(fl), d: "HIGH + CONFIRMED", go: "#/triage/events", tone: "tone-high" },
     { k: "Confirmed decodes", v: nfmt(cf), d: cf ? "payload recovered" : "none yet", go: "#/triage/events", tone: cf ? "tone-conf" : "" },
     { k: "Active responses", v: nfmt(t.blocked), d: "sources dropped / sunk", go: "#/response/ledger", tone: "" },
@@ -1313,12 +1331,22 @@ function renderMiniAlerts() {
    TRIAGE — events feed
    ================================================================ */
 function setTriageMode(mode, updateHash) {
-  S.triageMode = mode === "sources" ? "sources" : "events";
+  S.triageMode = ["sources", "queries"].includes(mode) ? mode : "events";
   els("#triage-mode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.triageMode));
   $("triage-events").style.display = S.triageMode === "events" ? "" : "none";
+  $("triage-queries").style.display = S.triageMode === "queries" ? "" : "none";
   $("triage-sources").style.display = S.triageMode === "sources" ? "" : "none";
   if (updateHash !== false) location.hash = "#/triage/" + S.triageMode;
   if (S.triageMode === "sources") loadSessions();
+  if (S.triageMode === "queries") loadQueries();
+}
+/* Re-render whichever Triage table is on screen. The risk/window/search
+   controls are shared by all three modes, so each of their handlers must
+   repaint the ACTIVE table rather than assume Events. */
+function renderTriageTable() {
+  if (S.triageMode === "queries") renderQueries();
+  else if (S.triageMode === "sources") renderSources();
+  else renderEvents();
 }
 function visibleEvents() {
   let rows = S.events.slice();
@@ -1362,7 +1390,8 @@ function renderEvents() {
       <td>${procHtml(e.process)}</td></tr>`;
   }).join("") : `<tr><td colspan="6" class="empty">${
       S.events.length ? "no events match the current filters" :
-      "no alerts yet — quiet network is good"}</td></tr>`;
+      "no alerts yet — this table lists HIGH and CONFIRMED only. Use the "
+      + "Queries tab to see every lookup, including LOW and MEDIUM."}</td></tr>`;
   $("events-count").textContent = rows.length
     ? `showing ${rows.length} of ${S.events.length}` : "";
   els("#events-table tbody tr[data-key]").forEach((tr) =>
@@ -1406,6 +1435,49 @@ function renderEventDetail(e) {
     navigator.clipboard && navigator.clipboard.writeText(JSON.stringify(e, null, 2));
     toast("Event JSON copied", "ok");
   });
+}
+
+/* ---------------- queries mode ----------------
+   The Events table can only ever hold HIGH/CONFIRMED, because the engine
+   writes a `risk_events` row only for those two verdicts. That left the
+   Overview "Queries" counter — which counts EVERY stored row — with no view
+   behind it: the number said 8, the Triage table said "no alerts yet", and
+   the verdict dropdown's Low/Medium options filtered a list that could
+   never contain those values. This mode reads the same rows the counter
+   counts, straight from /api/queries. */
+function visibleQueries() {
+  let rows = S.queries.slice();
+  if (S.triageRisk) rows = rows.filter((q) => q.risk_level === S.triageRisk);
+  if (S.triageWindow) {
+    const cut = Date.now() / 1000 - S.triageWindow;
+    rows = rows.filter((q) => q.ts >= cut);
+  }
+  const s = S.triageSearch.trim().toLowerCase();
+  if (s) rows = rows.filter((q) =>
+    (q.qname || "").toLowerCase().includes(s) || (q.src_ip || "").includes(s) ||
+    (q.process || "").toLowerCase().includes(s) || (q.resolver || "").includes(s));
+  return rows.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+}
+function renderQueries() {
+  const rows = visibleQueries();
+  const tb = el("#queries-table tbody");
+  tb.innerHTML = rows.length ? rows.map((q) => `
+    <tr class="sev ${esc(q.risk_level)}" data-src="${esc(q.src_ip)}">
+      <td class="muted num">${fmtT(q.ts)}</td>
+      <td class="qname" title="${esc(q.qname)}">${esc(q.qname)}</td>
+      <td class="mono faint">${esc(q.src_ip)}</td>
+      <td>${riskBadge(q.risk_level)}</td>
+      <td class="num faint">${q.rf_probability == null ? "–"
+        : Number(q.rf_probability).toFixed(3)}</td>
+      <td class="mono faint">${esc(q.resolver || "–")}</td>
+      <td>${procHtml(q.process)}</td></tr>`).join("")
+    : `<tr><td colspan="7" class="empty">${
+      S.queries.length ? "no queries match the current filters" :
+      "no queries captured yet — the engine stores every lookup it sees"}</td></tr>`;
+  $("queries-count").textContent = rows.length
+    ? `showing ${rows.length} of ${S.queries.length}` : "";
+  els("#queries-table tbody tr[data-src]").forEach((tr) =>
+    tr.addEventListener("click", () => openSourceDrawer(tr.dataset.src)));
 }
 
 /* ---------------- sources mode ---------------- */
@@ -1569,6 +1641,7 @@ function setSse(state) {
 }
 function onLiveQueries(queries) {
   S.queries = queries.concat(S.queries).slice(0, 500);
+  if (S.route.view === "triage" && S.triageMode === "queries") renderQueries();
   if (S.route.view === "triage" && S.triageMode === "sources" && S.sessions.length)
     loadSessions();
 }
@@ -1921,6 +1994,7 @@ async function loadQueries() {
   const d = await jget("/api/queries?limit=400");
   if (d && d.__err) return;
   S.queries = d.queries || [];
+  if (S.route.view === "triage" && S.triageMode === "queries") renderQueries();
 }
 async function loadSessions() {
   const d = await jget("/api/sessions");
@@ -1977,6 +2051,7 @@ function refresh() {
   if (v === "overview") loadEvents();
   if (v === "triage") {
     if (S.triageMode === "events") { loadEvents(); loadQueries(); }
+    else if (S.triageMode === "queries") loadQueries();
     else loadSessions();
   }
   if (v === "response") {
@@ -2127,12 +2202,12 @@ $("global-search").addEventListener("focus", openPalette);
 $("global-search").addEventListener("input", (e) => { S.search = e.target.value; });
 $("triage-search").addEventListener("input", (e) => {
   S.triageSearch = e.target.value;
-  if (S.triageMode === "events") renderEvents(); else renderSources();
+  renderTriageTable();
 });
 $("triage-risk").addEventListener("change", (e) => {
-  S.triageRisk = e.target.value; renderEvents(); });
+  S.triageRisk = e.target.value; renderTriageTable(); });
 $("triage-window").addEventListener("change", (e) => {
-  S.triageWindow = +e.target.value; renderEvents(); });
+  S.triageWindow = +e.target.value; renderTriageTable(); });
 els("#triage-mode button").forEach((b) =>
   b.addEventListener("click", () => setTriageMode(b.dataset.mode)));
 els("#response-mode button").forEach((b) =>

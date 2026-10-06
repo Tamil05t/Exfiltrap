@@ -122,7 +122,28 @@ cp -r "$ENGINE_DIR" "$ROOT/desktop/src-tauri/resources/exfiltrap-engine"
 # installed. On CI runners the system packages win and this is a no-op.
 if [ -f "$HOME/gtk-dev/env.sh" ]; then . "$HOME/gtk-dev/env.sh"; fi
 cd "$ROOT/desktop/src-tauri"
-cargo build --release
+# A broken Rust toolchain must not block a rebuild of the ENGINE.
+#
+# The shell and the engine are independent artefacts: the shell only spawns
+# the engine (pkexec) and opens a webview on 127.0.0.1:5050. Every detection
+# change lives in the Python engine, so an unchanged prebuilt shell still
+# ships the new engine correctly. Without this fallback a host whose rustc
+# cannot load its own driver —
+#   rustc: symbol lookup error: librustc_driver-*.so:
+#     undefined symbol: ..._M_mutateEmmPKcm, version LLVM_23.1
+# (a partially-upgraded LLVM/libstdc++, seen on this machine 2026-10-06)
+# failed the whole AppImage build with `exit status: 127` after the engine
+# had already been built successfully.
+if ! cargo build --release; then
+  if [ -x "target/release/exfiltrap-desktop" ]; then
+    echo "   WARNING: cargo build failed — reusing the existing release shell." >&2
+    echo "   WARNING: the engine IS rebuilt; only the unchanged Rust shell is stale." >&2
+  else
+    echo "ERROR: cargo build failed and no prebuilt shell exists to fall back" >&2
+    echo "       on. Fix the Rust toolchain (e.g. reinstall the rust package)." >&2
+    exit 1
+  fi
+fi
 # cargo names the binary after the crate; the tauri bundler would rename
 # it to mainBinaryName — we bundle ourselves, so we rename here.
 test -x "target/release/exfiltrap-desktop"

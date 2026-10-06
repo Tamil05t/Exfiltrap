@@ -4,13 +4,20 @@ import os
 import queue
 
 import pytest
-from scapy.all import DNS, DNSQR, IP, UDP
+from scapy.all import DNS, DNSQR, DNSRR, IP, IPv6, TCP, UDP
 
-from exfiltrap.capture import _push, packet_to_query
+from exfiltrap.capture import _push, packet_to_query, packet_to_response
 
 
 def dns_query_packet(qname="abc.tunnel.example", src="10.99.0.2"):
     return IP(src=src) / UDP(sport=40000, dport=53) / DNS(
+        rd=1, qd=DNSQR(qname=qname)
+    )
+
+
+def dns_query_packet_v6(qname="abc.tunnel.example", src="2001:db8::1",
+                        dst="2620:fe::9"):
+    return IPv6(src=src, dst=dst) / UDP(sport=40000, dport=53) / DNS(
         rd=1, qd=DNSQR(qname=qname)
     )
 
@@ -93,6 +100,66 @@ class TestWireFormat:
         wire = IP(src="10.99.0.2") / UDP(sport=40000, dport=53) / bytes(inner)
         q = packet_to_query(wire)
         assert q is None or q.qname != "4EI.GK4.tunnel.example"
+
+
+class TestIPv6:
+    """The sensor must not be blind to half the internet.
+
+    ``packet_to_query`` used to guard with ``IP not in pkt`` — and scapy's
+    ``IP`` is the **IPv4** layer, so every IPv6 packet returned None and
+    IPv6 lookups were silently invisible. Measured on a dual-stack host:
+    systemd-resolved held established UDP/53 sockets to ``[2620:fe::9]:53``
+    (Quad9 over IPv6) while the sensor stored IPv4 rows only.
+    """
+
+    def test_ipv6_query_parsed(self):
+        q = packet_to_query(dns_query_packet_v6("abc.tunnel.example."))
+        assert q is not None
+        assert q.src_ip == "2001:db8::1"
+        assert q.dst_ip == "2620:fe::9"
+        assert q.qname == "abc.tunnel.example"      # trailing dot stripped
+        assert q.sport == 40000
+
+    def test_ipv6_response_parsed(self):
+        pkt = (
+            IPv6(src="2620:fe::9", dst="2001:db8::1")
+            / UDP(sport=53, dport=40000)
+            / DNS(
+                id=1, qr=1,
+                qd=DNSQR(qname="abc.tunnel.example"),
+                an=DNSRR(rrname="abc.tunnel.example", type="AAAA",
+                         rdata="2606:2800:220:1:248:1893:25c8:1946"),
+            )
+        )
+        r = packet_to_response(pkt)
+        assert r is not None
+        assert r.client_ip == "2001:db8::1"
+        assert r.resolver_ip == "2620:fe::9"
+        assert r.answer_ips == ("2606:2800:220:1:248:1893:25c8:1946",)
+
+    def test_ipv6_tcp_query_parsed(self):
+        # DNS over TCP on IPv6: the same 2-byte length prefix as IPv4, and
+        # scapy still does not bind the DNS dissector onto the TCP payload.
+        msg = bytes(DNS(rd=1, qd=DNSQR(qname="t6.tunnel.example")))
+        pkt = (
+            IPv6(src="2001:db8::1", dst="2620:fe::9")
+            / TCP(sport=40000, dport=53)
+            / (b"\x00" + bytes([len(msg)]) + msg)
+        )
+        q = packet_to_query(pkt)
+        assert q is not None
+        assert q.qname == "t6.tunnel.example"
+        assert q.src_ip == "2001:db8::1"
+
+    def test_ipv4_still_works(self):
+        # The family-agnostic accessor must not regress the IPv4 path.
+        q = packet_to_query(dns_query_packet("v4.tunnel.example"))
+        assert q is not None
+        assert q.src_ip == "10.99.0.2"
+        assert q.sport == 40000
+
+    def test_ipv6_without_dns_is_none(self):
+        assert packet_to_query(IPv6() / UDP()) is None
 
 
 class TestQueue:
